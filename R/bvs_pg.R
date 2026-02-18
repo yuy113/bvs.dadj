@@ -188,7 +188,8 @@ bvs_pg <- function(X, y,
         eta_tilde = eta1_tilde,
         e = e_eta, f = f_eta,
         T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
-        beta_init = beta_init, gamma_init = as.integer(gamma_init),
+        thin = as.integer(thin),
+        beta_in = beta_init, gamma_in = as.integer(gamma_init),
         alpha_in = alpha_init)
     },
 
@@ -209,7 +210,8 @@ bvs_pg <- function(X, y,
         eta1_tilde = eta1_tilde, eta2_tilde = eta2_tilde,
         e = e_eta, f = f_eta,
         T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
-        beta_init = beta_init, gamma_init = as.integer(gamma_init),
+        thin = as.integer(thin),
+        beta_in = beta_init, gamma_in = as.integer(gamma_init),
         alpha_in = alpha_init)
     },
 
@@ -226,7 +228,8 @@ bvs_pg <- function(X, y,
         eta_tilde = eta1_tilde,
         e = e_eta, f = f_eta,
         T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
-        beta_init = beta_init, gamma_init = as.integer(gamma_init),
+        thin = as.integer(thin),
+        beta_in = beta_init, gamma_in = as.integer(gamma_init),
         alpha_in = alpha_init)
     },
 
@@ -312,7 +315,8 @@ bvs_pg <- function(X, y,
           eta1_tilde = eta1_tilde, eta2_tilde = eta2_tilde,
           e_eta = e_eta, f_eta = f_eta,
           T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
-          beta_init = beta_init, gamma_init = as.integer(gamma_init),
+          thin = as.integer(thin),
+          beta_in = beta_init, gamma_in = as.integer(gamma_init),
           alpha_in = alpha_init)
       }
     }

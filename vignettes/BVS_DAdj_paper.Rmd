@@ -123,11 +123,14 @@ where:
 - $\eta_1, \eta_2 \geq 0$ are coupling parameters controlling how strongly a predictor's inclusion is influenced by its neighbors in $\mathbf{R}$ and $\mathbf{R}'$, respectively.
 - $Z(\mu, \eta_1, \eta_2)$ is the intractable normalizing constant.
 
-**Phase transition and eta prior.**
-Following @STV2011, we identify phase-transition values $\eta_{\text{PT},i}$ for each adjacency matrix and place scaled Beta priors:
+**Eta prior used in the package.**
+In the implementation, each coupling parameter is bounded by a user-specified
+upper limit (`eta_sd`, `eta1_sd`, `eta2_sd`) and sampled on a scaled Beta domain:
 $$
-\eta_i / \eta_{\text{PT},i} \sim \text{Beta}(e, f), \quad i = 1, 2
+\eta_i = \eta_{i,\max} u_i,\quad u_i \sim \text{Beta}(e, f), \quad i=1,2.
 $$
+The helper `phase_transition()` can be used to choose practically stable values
+for $\eta_{i,\max}$ before fitting the full model.
 
 ## Estimating unknown adjacency: Bayesian GGM
 
@@ -153,7 +156,7 @@ $$
 ## Pólya-Gamma augmented Gibbs sampler
 
 The PG sampler (`bvs_pg()`) introduces auxiliary variables $\omega_k \sim \text{PG}(1, \psi_k)$
-where $\psi_k = \alpha + \mathbf{X}_k \boldsymbol{\beta}$, rendering the logistic likelihood conditionally Gaussian [@PG2013].  This enables block Gibbs updates for $(\boldsymbol{\beta}, \alpha)$ with closed-form full conditionals:
+where $\psi_k = \alpha + \mathbf{X}_k \boldsymbol{\beta}$, rendering the logistic likelihood conditionally Gaussian [@PG2013].  In the C++ backend, PG draws are obtained through a truncated-series approximation, after which block updates for $(\boldsymbol{\beta}, \alpha)$ use Gaussian conditional forms:
 $$
 \boldsymbol{\beta}_\gamma \mid \cdot \sim \mathcal{N}\!\left(\mathbf{V}_\gamma \mathbf{m}_\gamma,\; \mathbf{V}_\gamma\right), \quad \mathbf{V}_\gamma = \left(\mathbf{X}_\gamma^\top \boldsymbol{\Omega}_\omega \mathbf{X}_\gamma + \sigma^{-2} \mathbf{I}\right)^{-1}
 $$
@@ -215,8 +218,8 @@ fit <- bvs_mh(X, y,
 ## Post-processing
 
 ```{r post-process, eval=FALSE}
-summary(fit)  # Selected variables, PIPs, acceptance rates
-plot(fit)     # Trace plots and marginal PIP bar plots
+summary(fit)  # Selected variables, PIPs, posterior means/intervals
+plot(fit)     # PIP bar plot (optionally top_n)
 ```
 
 # Simulation study 1: Moderate dimensions ($n = 500, p = 100$) {#sec-sim1}

@@ -7,7 +7,6 @@
 
 namespace {
 
-
 // =============================================================================
 // HELPER FUNCTIONS  (sub-matrix removal / insertion for Wang 2012 GGM)
 // =============================================================================
@@ -347,7 +346,6 @@ static void moller_update_eta(const Rcpp::IntegerMatrix &R1,
     eta2 = eta2_new;
 }
 
-
 } // anonymous namespace
 // =============================================================================
 // PHASE TRANSITION DETECTION (exported utility)
@@ -399,8 +397,10 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
     int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm,
     double lambda_ggm, double eta1_sd, double eta2_sd, double mu_tilde,
     double eta1_tilde, double eta2_tilde, double e_eta, double f_eta,
-    unsigned int T_max, int proposal_type, arma::vec beta_init,
-    arma::uvec gamma_init, double alpha_in) {
+    unsigned int T_max, int proposal_type, int thin = 1,
+    Rcpp::Nullable<Rcpp::NumericVector> beta_in = R_NilValue,
+    Rcpp::Nullable<Rcpp::IntegerVector> gamma_in = R_NilValue,
+    double alpha_in = 0.0) {
   Rcpp::RNGScope scope;
 
   const arma::uword n = X.n_rows;
@@ -410,9 +410,17 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
   if (R_fix.n_cols != p || R_fix.n_rows != p)
     Rcpp::stop("R_fix dimensions must match p = %d", p);
 
+  if (thin < 1)
+    thin = 1;
+
   // ---- Initialisation -------------------------------------------------------
-  arma::vec beta = std::move(beta_init);
-  arma::uvec gamma = std::move(gamma_init);
+  arma::vec beta(p, arma::fill::zeros);
+  arma::uvec gamma(p, arma::fill::zeros);
+  if (beta_in.isNotNull())
+    beta = Rcpp::as<arma::vec>(beta_in);
+  if (gamma_in.isNotNull())
+    gamma = Rcpp::as<arma::uvec>(gamma_in);
+
   double alpha = alpha_in;
   double sigmasq = 1.0;
   double eta1 = std::min(0.01, eta1_sd * 0.5); // initial eta for R_dyn
@@ -451,15 +459,18 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
   // ---- R_dyn IntegerMatrix snapshot (rebuilt each iteration for MÃ¶ller) ----
   Rcpp::IntegerMatrix R_dyn_int(p, p);
 
-  // ---- Output storage ------------------------------------------------------
-  arma::mat beta_out(niter, p, arma::fill::zeros);
-  arma::umat gamma_out(niter, p, arma::fill::zeros);
-  arma::vec eta1_out(niter), eta2_out(niter);
-  arma::vec alpha_out(niter), sigmasq_out(niter);
+  // ---- Output Storage ------------------------------------------------------
+  int n_save = niter / thin;
+  arma::mat beta_out(n_save, p);
+  arma::umat gamma_out(n_save, p);
+  arma::vec eta1_out(n_save);
+  arma::vec eta2_out(n_save);
+  arma::vec alpha_out(n_save);
+  arma::vec sigmasq_out(n_save);
 
   // Sparse Z_list: each entry stores only (row, col) edge indices from upper
   // triangle
-  Rcpp::List Z_list(niter);
+  Rcpp::List Z_list(n_save);
 
   arma::vec lin(n);
 
@@ -729,14 +740,15 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
     // ==================================================================
     // STORE SAMPLES (post burn-in)
     // ==================================================================
-    if (iter >= burnin) {
-      int s = iter - burnin;
-      beta_out.row(s) = beta.t();
-      gamma_out.row(s) = gamma.t();
-      eta1_out(s) = eta1;
-      eta2_out(s) = eta2;
-      alpha_out(s) = alpha;
-      sigmasq_out(s) = sigmasq;
+    // ---- Save Samples -------------------------------------------------------
+    if (iter >= burnin && (iter - burnin) % thin == 0) {
+      int idx = (iter - burnin) / thin;
+      beta_out.row(idx) = beta.t();
+      gamma_out.row(idx) = gamma.t();
+      eta1_out(idx) = eta1;
+      eta2_out(idx) = eta2;
+      alpha_out(idx) = alpha;
+      sigmasq_out(idx) = sigmasq;
 
       // Sparse Z storage: only store (row, col) of edges in upper triangle
       std::vector<int> edge_rows, edge_cols;
@@ -752,7 +764,7 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
         edges(ei, 0) = edge_rows[ei];
         edges(ei, 1) = edge_cols[ei];
       }
-      Z_list[s] = edges;
+      Z_list[idx] = edges;
     }
   } // end MCMC
 

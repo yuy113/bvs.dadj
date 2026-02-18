@@ -465,11 +465,10 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
         n_edges++;
 
   // GGM pre-allocated buffers
-  arma::mat A_sub, U_ggm, Ud_work;
+  arma::mat A_sub, Ud_work;
   arma::vec s_ggm, noise_ggm, v_ggm;
   if (d_max > 0) {
     A_sub.set_size(d_max, d_max);
-    U_ggm.set_size(d_max, d_max);
     Ud_work.set_size(d_max, d_max);
     s_ggm.set_size(d_max);
     noise_ggm.set_size(d_max);
@@ -574,22 +573,38 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
 
         for (int r2 = 0; r2 < d; ++r2)
           for (int c2 = r2; c2 < d; ++c2)
-            Ud_work(r2, c2) = U_ggm(r2, c2);
+            Ud_work(r2, c2) = U_chol_tmp(r2, c2);
 
         for (int k = 0; k < d; ++k)
           s_ggm(k) = G.val[i][k];
 
         arma::vec neg_s = -s_ggm.head(d);
         arma::mat Ud_view(Ud_work.memptr(), d, d, false, true);
-        arma::vec y_tmp = arma::solve(arma::trimatl(Ud_view.t()), neg_s,
-                                      arma::solve_opts::fast);
-        arma::vec mu_sub =
-            arma::solve(arma::trimatu(Ud_view), y_tmp, arma::solve_opts::fast);
+        const double min_diag = Ud_view.diag().min();
+        if (!std::isfinite(min_diag) || min_diag <= 1e-12)
+          continue;
+
+        arma::vec y_tmp;
+        bool solve_ok = arma::solve(
+            y_tmp, arma::trimatl(Ud_view.t()), neg_s,
+            arma::solve_opts::fast + arma::solve_opts::no_approx);
+        if (!solve_ok)
+          continue;
+        arma::vec mu_sub;
+        solve_ok = arma::solve(mu_sub, arma::trimatu(Ud_view), y_tmp,
+                               arma::solve_opts::fast +
+                                   arma::solve_opts::no_approx);
+        if (!solve_ok)
+          continue;
 
         for (int k = 0; k < d; ++k)
           noise_ggm(k) = R::rnorm(0.0, 1.0);
-        arma::vec delta = arma::solve(arma::trimatu(Ud_view), noise_ggm.head(d),
-                                      arma::solve_opts::fast);
+        arma::vec delta;
+        solve_ok = arma::solve(delta, arma::trimatu(Ud_view), noise_ggm.head(d),
+                               arma::solve_opts::fast +
+                                   arma::solve_opts::no_approx);
+        if (!solve_ok)
+          continue;
         arma::vec b_ggm = mu_sub + delta;
 
         for (int k = 0; k < d; ++k) {

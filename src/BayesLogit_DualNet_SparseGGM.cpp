@@ -9,7 +9,6 @@
 
 namespace {
 
-
 // =============================================================================
 // SECTION 1: HELPER FUNCTIONS
 // =============================================================================
@@ -341,7 +340,6 @@ static void moller_update_dual_sparse(
     eta2 = eta2_new;
 }
 
-
 } // anonymous namespace
 // =============================================================================
 // SECTION 5: MAIN FUNCTION
@@ -351,17 +349,14 @@ static void moller_update_dual_sparse(
 
 // [[Rcpp::export]]
 Rcpp::List BayesLogit_DualNet_SparseGGM(
-    const arma::mat &X, const arma::vec &y,
-    const Rcpp::IntegerVector &S_i, const Rcpp::IntegerVector &S_p_csc,
-    const Rcpp::NumericVector &S_x, const Rcpp::NumericVector &S_diag,
-    const Rcpp::IntegerMatrix &R_fix_int,
-    int p_ggm, int niter, int burnin,
-    double mu, double nu0, double sigmasq0, double alpha0, double beta0,
-    double h, double e, double f,
-    double v0_ggm, double v1_ggm, double pii_ggm,
-    double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde,
-    double eta2_tilde, unsigned int T_max, int proposal_type,
-    int thin = 1,
+    const arma::mat &X, const arma::vec &y, const Rcpp::IntegerVector &S_i,
+    const Rcpp::IntegerVector &S_p_csc, const Rcpp::NumericVector &S_x,
+    const Rcpp::NumericVector &S_diag, const Rcpp::IntegerMatrix &R_fix_int,
+    int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0,
+    double alpha0, double beta0, double h, double e, double f, double v0_ggm,
+    double v1_ggm, double pii_ggm, double eta1_sd, double eta2_sd,
+    double mu_tilde, double eta1_tilde, double eta2_tilde, unsigned int T_max,
+    int proposal_type, int n_mh_gamma = 5, int thin = 1,
     Rcpp::Nullable<Rcpp::NumericVector> beta_in = R_NilValue,
     Rcpp::Nullable<Rcpp::IntegerVector> gamma_in = R_NilValue,
     double alpha_in = 0.0) {
@@ -447,13 +442,12 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
         n_edges++;
 
   // GGM pre-allocated buffers (max-degree sized)
-  arma::mat A_sub, U_ggm;
+  arma::mat A_sub;
   arma::vec s_ggm, noise_ggm, v_ggm;
   // FIX: Ud_work allocated once — avoids d×d copy per node in GGM sweep
   arma::mat Ud_work;
   if (d_max > 0) {
     A_sub.set_size(d_max, d_max);
-    U_ggm.set_size(d_max, d_max);
     Ud_work.set_size(d_max, d_max);
     s_ggm.set_size(d_max);
     noise_ggm.set_size(d_max);
@@ -542,7 +536,7 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
           A_sub(k, k) += (1.0 / v_val);
         }
 
-        // Single Cholesky in-place on A_sub → U_ggm
+        // Single Cholesky on A_sub with local upper factor
         arma::mat A_chol_tmp = A_sub.submat(0, 0, d - 1, d - 1);
         arma::mat U_chol_tmp;
         bool ok = arma::chol(U_chol_tmp, arma::symmatu(A_chol_tmp));
@@ -558,7 +552,7 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
         // FIX: Copy Cholesky result into pre-allocated Ud_work (no new alloc)
         for (int r2 = 0; r2 < d; ++r2)
           for (int c2 = r2; c2 < d; ++c2)
-            Ud_work(r2, c2) = U_ggm(r2, c2);
+            Ud_work(r2, c2) = U_chol_tmp(r2, c2);
 
         for (int k = 0; k < d; ++k)
           s_ggm(k) = G.val[i][k];
@@ -566,16 +560,32 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
         // Solve via Cholesky: mu = A^{-1}(-s)
         arma::vec neg_s = -s_ggm.head(d);
         arma::mat Ud_view(Ud_work.memptr(), d, d, false, true); // no-copy view
-        arma::vec y_tmp = arma::solve(arma::trimatl(Ud_view.t()), neg_s,
-                                      arma::solve_opts::fast);
-        arma::vec mu_sub =
-            arma::solve(arma::trimatu(Ud_view), y_tmp, arma::solve_opts::fast);
+        const double min_diag = Ud_view.diag().min();
+        if (!std::isfinite(min_diag) || min_diag <= 1e-12)
+          continue;
+
+        arma::vec y_tmp;
+        bool solve_ok =
+            arma::solve(y_tmp, arma::trimatl(Ud_view.t()), neg_s,
+                        arma::solve_opts::fast + arma::solve_opts::no_approx);
+        if (!solve_ok)
+          continue;
+        arma::vec mu_sub;
+        solve_ok =
+            arma::solve(mu_sub, arma::trimatu(Ud_view), y_tmp,
+                        arma::solve_opts::fast + arma::solve_opts::no_approx);
+        if (!solve_ok)
+          continue;
 
         // Sample: beta = mu + U^{-1} * noise
         for (int k = 0; k < d; ++k)
           noise_ggm(k) = R::rnorm(0.0, 1.0);
-        arma::vec delta = arma::solve(arma::trimatu(Ud_view), noise_ggm.head(d),
-                                      arma::solve_opts::fast);
+        arma::vec delta;
+        solve_ok =
+            arma::solve(delta, arma::trimatu(Ud_view), noise_ggm.head(d),
+                        arma::solve_opts::fast + arma::solve_opts::no_approx);
+        if (!solve_ok)
+          continue;
         arma::vec b_ggm = mu_sub + delta;
 
         // SSVS edge selection with incremental edge tracking
@@ -609,7 +619,9 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
     //   P(γ_j | γ_{-j}) ∝ exp(μ + η₁·neigh_dyn + η₂·neigh_fix)
     // OPT: Uses pre-computed sd_sig
     // -----------------------------------------------------------------------
-    for (arma::uword kk = 0; kk < 5; ++kk) {
+    // // 4. Update Gamma (Ising)
+    int n_update_gamma = n_mh_gamma;
+    for (int kk = 0; kk < n_update_gamma; ++kk) {
       arma::uword j =
           static_cast<arma::uword>(std::floor(R::runif(0.0, (double)p)));
       if (j >= p)

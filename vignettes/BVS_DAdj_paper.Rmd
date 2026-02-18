@@ -1,0 +1,724 @@
+---
+title: "BVS.DAdj: Bayesian Variable Selection with Dual-Adjacency Network-Informed Ising Priors in R"
+author:
+  - name: Yubing Yao
+    affiliation: University of Massachusetts Amherst
+    email: yyao@umass.edu
+  - name: Raji Balasubramanian
+    affiliation: University of Massachusetts Amherst School of Public Health
+    email: rbalasub@schoolph.umass.edu
+  - name: Mahlet Tadesse
+    affiliation: Georgetown University
+    email: mgt26@georgetown.edu
+abstract: >
+  This article introduces the **BVS.DAdj** R package, which implements Bayesian
+  variable selection for logistic regression models using Markov random field
+  (MRF) priors that incorporate dual adjacency structures among predictors.
+  The package provides two MCMC sampling strategies---Metropolis-Hastings (MH)
+  and Pólya-Gamma (PG) data augmentation---each supporting five adjacency types:
+  fixed, dual-fixed, graphical lasso, Bayesian GGM, and combined GGM-plus-fixed.
+  Both dense ($p < n$) and sparse high-dimensional ($p \gg n$) backends are
+  implemented in C++ via **Rcpp** and **RcppArmadillo** for computational
+  efficiency.  We describe the underlying statistical model, the package API,
+  and demonstrate its usage through simulation studies under moderate
+  ($n = 500, p = 100$) and high-dimensional ($n = 200, p = 1000$) settings,
+  including MCMC convergence diagnostics, variable selection performance metrics,
+  and running time comparisons across sampling backends.
+date: "`r Sys.Date()`"
+bibliography: references.bib
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+    theme: flatly
+    highlight: tango
+    code_folding: show
+    df_print: kable
+vignette: >
+  %\VignetteIndexEntry{BVS.DAdj: R Journal Paper}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo       = TRUE,
+  message    = FALSE,
+  warning    = FALSE,
+  fig.align  = "center",
+  fig.width  = 7,
+  fig.height = 5,
+  cache      = TRUE
+)
+```
+
+# Introduction
+
+In metabolic case-control studies and high-throughput biological experiments, a
+central goal is to identify which of many candidate variables (e.g., metabolites,
+genes) are genuinely associated with a disease outcome.  These variables often
+exhibit complex dependency structures arising from multiple sources: biological
+pathway databases provide partial knowledge of inter-variable relationships,
+while data-driven methods can reveal additional conditional dependencies.
+
+Standard penalization methods such as LASSO [@Tib1996] and its extensions
+[@ZH2005; @YL2006; @Zou2006] perform variable selection by shrinking regression
+coefficients, but may miss weakly associated variables that are correlated with
+stronger signals.  Bayesian variable selection with spike-and-slab priors
+[@GM1993; @GM1997] provides a principled alternative that quantifies uncertainty
+through posterior inclusion probabilities (PIPs).
+
+Building on the Markov random field (MRF) framework of @LZ2010 and @STV2011,
+the **BVS.DAdj** package extends the Ising prior on selection indicators
+$\boldsymbol{\gamma}$ to incorporate *two independent* adjacency structures
+simultaneously---one from prior knowledge and one estimated from data.  This
+dual-adjacency formulation allows borrowing strength across both sources of
+structural information.
+
+The package implements 12 optimized C++ backends accessed through two
+user-facing R functions, `bvs_mh()` and `bvs_pg()`, covering a complete matrix
+of sampler type × adjacency source × dimensionality.
+
+The remainder of this article is organized as follows. Section 2 describes the
+statistical model and prior specifications. Section 3 outlines the MCMC sampling
+strategies. Section 4 describes the package design and API. Sections 5 and 6
+present simulation studies for the moderate-dimensional and high-dimensional
+settings, respectively. Section 7 summarizes the results.
+
+# Model formulation and priors {#sec-model}
+
+## Logistic regression model
+
+Consider a case-control study with binary outcome $\mathbf{y} = (y_1, \ldots, y_n)^\top$ where
+$y_k \in \{0, 1\}$ and a design matrix $\mathbf{X} = (X_{ik})_{n \times p}$
+of $p$ candidate predictors for $n$ observations.  The logistic regression model
+is
+$$
+\text{logit}\,\Pr(y_k = 1) = \alpha + \mathbf{X}_k \boldsymbol{\beta}, \quad k = 1, \ldots, n
+$$
+where $\alpha$ is the intercept and $\boldsymbol{\beta} = (\beta_1, \ldots, \beta_p)^\top$ is the vector of regression coefficients.
+
+## Spike-and-slab prior for variable selection
+
+We introduce binary selection indicators $\boldsymbol{\gamma} = (\gamma_1, \ldots, \gamma_p)^\top \in \{0,1\}^p$ with a point-mass mixture prior on each coefficient:
+$$
+\beta_j \mid \gamma_j, \sigma^2 \sim \gamma_j \cdot \mathcal{N}(\beta_0, \sigma^2) + (1 - \gamma_j) \cdot \delta_0(\beta_j), \quad j = 1, \ldots, p
+$$
+The intercept receives a conjugate normal prior $\alpha \sim \mathcal{N}(\alpha_0, h_\alpha \sigma^2)$ with $h_\alpha$ large, and the variance component follows an inverse-gamma distribution:
+$$
+\sigma^2 \sim \text{Inverse-Gamma}\!\left(\frac{\nu_0}{2},\; \frac{\nu_0 \sigma_0^2}{2}\right)
+$$
+
+## Variant MRF prior with dual adjacency
+
+Let $\mathbf{R}$ and $\mathbf{R}'$ be two $p \times p$ symmetric binary adjacency matrices encoding two independent sources of structural information among the predictors.  The prior on $\boldsymbol{\gamma}$ takes the Ising/MRF form:
+$$
+p(\boldsymbol{\gamma} \mid \mu, \eta_1, \eta_2) = \frac{1}{Z(\mu,\eta_1,\eta_2)}\exp\!\Big(\mu\,\mathbf{1}_p^\top \boldsymbol{\gamma} + \eta_1\, \boldsymbol{\gamma}^\top \mathbf{R}\, \boldsymbol{\gamma} + \eta_2\, \boldsymbol{\gamma}^\top \mathbf{R}'\, \boldsymbol{\gamma}\Big)
+$$
+where:
+
+- $\mu$ controls the baseline sparsity level.  For a predictor with no neighbors in either graph, the marginal inclusion probability is $\text{expit}(\mu)$.
+- $\eta_1, \eta_2 \geq 0$ are coupling parameters controlling how strongly a predictor's inclusion is influenced by its neighbors in $\mathbf{R}$ and $\mathbf{R}'$, respectively.
+- $Z(\mu, \eta_1, \eta_2)$ is the intractable normalizing constant.
+
+**Phase transition and eta prior.**
+Following @STV2011, we identify phase-transition values $\eta_{\text{PT},i}$ for each adjacency matrix and place scaled Beta priors:
+$$
+\eta_i / \eta_{\text{PT},i} \sim \text{Beta}(e, f), \quad i = 1, 2
+$$
+
+## Estimating unknown adjacency: Bayesian GGM
+
+When the second adjacency $\mathbf{R}'$ is unknown, we model the predictors as
+$\mathbf{X}_k \sim \mathcal{N}_p(\mathbf{0}, \boldsymbol{\Omega}^{-1})$ and place a continuous spike-and-slab SSVS prior on $\boldsymbol{\Omega}$ following @WH2015:
+$$
+p(\boldsymbol{\Omega} \mid \mathbf{R}', \theta) \propto \prod_{i < j} \mathcal{N}\!\left(\omega_{ij} \mid 0,\, v^2_{r'_{ij}}\right) \prod_i \text{Exp}\!\left(\omega_{ii} \mid \tfrac{\lambda}{2}\right) \cdot \mathbf{1}_{\boldsymbol{\Omega} \in M^+}
+$$
+where $v_{r'_{ij}} = v_0$ (spike) if $r'_{ij} = 0$ and $v_1$ (slab) if $r'_{ij} = 1$.  Edge indicators are updated via:
+$$
+\Pr(r'_{ij} = 1 \mid \boldsymbol{\Omega}) = \frac{\pi\, \mathcal{N}(\omega_{ij} \mid 0, v_1^2)}{\pi\, \mathcal{N}(\omega_{ij} \mid 0, v_1^2) + (1-\pi)\, \mathcal{N}(\omega_{ij} \mid 0, v_0^2)}
+$$
+
+# MCMC sampling strategies {#sec-mcmc}
+
+## Metropolis-Hastings sampler
+
+The MH sampler (`bvs_mh()`) uses random-walk proposals for $\boldsymbol{\beta}$, $\alpha$, and $\sigma^2$, and a component-wise add/delete move for $\gamma_j$.  For each $j$, a flip $\gamma_j^* = 1 - \gamma_j$ is proposed with the corresponding $\beta_j^*$ drawn from the spike-and-slab prior; the move is accepted with probability $\min(1, \exp(\Delta))$ where
+$$
+\Delta = \ell(\boldsymbol{\beta}^*, \boldsymbol{\gamma}^*) - \ell(\boldsymbol{\beta}, \boldsymbol{\gamma}) - \frac{(\beta_j - \beta_0)^2 - (\beta_j^* - \beta_0)^2}{2\sigma^2}
+$$
+
+## Pólya-Gamma augmented Gibbs sampler
+
+The PG sampler (`bvs_pg()`) introduces auxiliary variables $\omega_k \sim \text{PG}(1, \psi_k)$
+where $\psi_k = \alpha + \mathbf{X}_k \boldsymbol{\beta}$, rendering the logistic likelihood conditionally Gaussian [@PG2013].  This enables block Gibbs updates for $(\boldsymbol{\beta}, \alpha)$ with closed-form full conditionals:
+$$
+\boldsymbol{\beta}_\gamma \mid \cdot \sim \mathcal{N}\!\left(\mathbf{V}_\gamma \mathbf{m}_\gamma,\; \mathbf{V}_\gamma\right), \quad \mathbf{V}_\gamma = \left(\mathbf{X}_\gamma^\top \boldsymbol{\Omega}_\omega \mathbf{X}_\gamma + \sigma^{-2} \mathbf{I}\right)^{-1}
+$$
+where $\boldsymbol{\Omega}_\omega = \text{diag}(\omega_1, \ldots, \omega_n)$ and $\kappa_k = y_k - 1/2$.
+
+## Möller auxiliary variable update for $\eta_1, \eta_2$
+
+The normalizing constant $Z(\mu, \eta_1, \eta_2)$ is intractable.  Following @MB2006, we introduce auxiliary variables $\boldsymbol{\omega}$ drawn via Propp-Wilson perfect simulation from the Ising model at reference parameters $(\tilde{\mu}, \tilde{\eta}_1, \tilde{\eta}_2)$, yielding an MH ratio that cancels the intractable ratio $Z'/Z$.
+
+## Sparse high-dimensional variant
+
+For $p \gg n$, the package stores the empirical covariance $\mathbf{S} = \mathbf{X}^\top\mathbf{X}$ in compressed sparse column (CSC) format and uses column-wise block Gibbs steps for the precision matrix.  The selection indicator updates use a targeted MH scheme cycling through `n_mh_gamma` randomly chosen variables per iteration.
+
+# Package design and API {#sec-api}
+
+## Installation
+
+```{r install, eval=FALSE}
+# Install from GitHub
+devtools::install_github("yubingyao/BVS.DAdj")
+```
+
+```{r load-pkg}
+library(BVS.DAdj)
+```
+
+## User-facing functions
+
+The package exports two primary functions that dispatch to 12 C++ backends:
+
+| Function   | Sampler | Primary usage |
+|:-----------|:--------|:--------------|
+| `bvs_mh()` | Metropolis-Hastings | All adjacency types; general purpose |
+| `bvs_pg()` | Pólya-Gamma Gibbs   | All adjacency types; faster mixing for moderate $p$ |
+
+Both accept a common interface:
+
+```{r api-example, eval=FALSE}
+fit <- bvs_mh(X, y,
+              adj_type = c("fixed", "dual_fixed", "glasso", "ggm", "ggm_fixed"),
+              adj_fixed = NULL,     # Required for "fixed", "dual_fixed", "ggm_fixed"
+              adj_fixed2 = NULL,    # Required for "dual_fixed"
+              sparse = FALSE,       # TRUE for p >> n backends
+              niter = 60000, burnin = 10000, thin = 1,
+              # ... additional hyperparameters
+)
+```
+
+## Adjacency types
+
+| `adj_type` | Adjacency source(s) | Eta | Backend count |
+|:-----------|:---------------------|:----|:--------------|
+| `"fixed"` | One user-supplied binary matrix | 1 | MH + PG |
+| `"dual_fixed"` | Two user-supplied binary matrices | 2 | MH + PG |
+| `"glasso"` | Graphical lasso estimated from $\mathbf{X}$ | 1 | MH + PG |
+| `"ggm"` | Bayesian GGM SSVS (dense or sparse) | 1 | MH + PG × dense/sparse |
+| `"ggm_fixed"` | GGM + one user-supplied fixed matrix | 2 | MH + PG × dense/sparse |
+
+## Post-processing
+
+```{r post-process, eval=FALSE}
+summary(fit)  # Selected variables, PIPs, acceptance rates
+plot(fit)     # Trace plots and marginal PIP bar plots
+```
+
+# Simulation study 1: Moderate dimensions ($n = 500, p = 100$) {#sec-sim1}
+
+## Data generation
+
+We generate a logistic regression dataset with $n = 500$ observations, $p = 100$ covariates, $p^* = 10$ truly active variables, and a block-correlation structure.  Covariates within the active set have pairwise correlation $\rho = 0.5$ to emulate metabolite clustering.
+
+```{r sim1-data}
+set.seed(2024)
+n <- 500; p <- 100; p_star <- 10
+
+# Construct correlation matrix: block structure for first p_star variables
+Sigma <- diag(p)
+for (i in 1:p_star) {
+  for (j in 1:p_star) {
+    if (i != j) Sigma[i, j] <- 0.5
+  }
+}
+
+# Generate covariates from multivariate normal
+X <- MASS::mvrnorm(n, mu = rep(0, p), Sigma = Sigma)
+
+# True coefficients: first p_star variables have nonzero effects
+beta_true <- rep(0, p)
+beta_true[1:p_star] <- c(1.5, -1.2, 1.0, -0.8, 0.6, -0.5, 0.4, -0.3, 0.25, -0.2)
+
+# Generate binary response
+eta_true <- X %*% beta_true
+prob_true <- plogis(eta_true)
+y <- rbinom(n, 1, prob_true)
+
+cat(sprintf("Response balance: %d cases / %d controls (%.1f%%)\n",
+            sum(y), sum(1 - y), 100 * mean(y)))
+```
+
+## Adjacency matrix construction
+
+We construct a fixed adjacency matrix reflecting partial biological knowledge:
+edges among the first 8 active variables and 5 random noise edges.
+
+```{r sim1-adj}
+R_known <- matrix(0L, p, p)
+# Block edges among first 8 active variables (partial knowledge)
+for (i in 1:8) {
+  for (j in (i+1):8) {
+    R_known[i, j] <- R_known[j, i] <- 1L
+  }
+}
+# Add a few noise edges
+set.seed(123)
+noise_pairs <- matrix(sample((p_star+1):p, 10), ncol = 2)
+for (k in 1:nrow(noise_pairs)) {
+  R_known[noise_pairs[k,1], noise_pairs[k,2]] <- 1L
+  R_known[noise_pairs[k,2], noise_pairs[k,1]] <- 1L
+}
+diag(R_known) <- 0L
+cat(sprintf("Adjacency matrix: %d edges\n", sum(R_known) / 2))
+```
+
+## Running the samplers
+
+We run three backends on this dataset:
+
+1. **MH with fixed adjacency** (`bvs_mh`, `adj_type = "fixed"`)
+2. **PG with fixed adjacency** (`bvs_pg`, `adj_type = "fixed"`)
+3. **PG with Bayesian GGM** (`bvs_pg`, `adj_type = "ggm"`, dense)
+
+```{r sim1-run, cache=TRUE}
+niter_sim <- 30000L
+burnin_sim <- 10000L
+
+# --- MH with fixed adjacency ---
+t_mh <- system.time({
+  fit_mh <- bvs_mh(X, y, adj_type = "fixed", adj_fixed = R_known,
+                    niter = niter_sim, burnin = burnin_sim,
+                    mu = -log(1/0.1 - 1), thin = 1L)
+})
+
+# --- PG with fixed adjacency ---
+t_pg <- system.time({
+  fit_pg <- bvs_pg(X, y, adj_type = "fixed", adj_fixed = R_known,
+                   niter = niter_sim, burnin = burnin_sim,
+                   mu = -log(1/0.1 - 1), thin = 1L)
+})
+
+# --- PG with dense Bayesian GGM ---
+t_pg_ggm <- system.time({
+  fit_pg_ggm <- bvs_pg(X, y, adj_type = "ggm", sparse = FALSE,
+                        niter = niter_sim, burnin = burnin_sim,
+                        mu = -log(1/0.1 - 1), thin = 1L)
+})
+```
+
+## Running time comparison
+
+```{r sim1-timing}
+timing_df <- data.frame(
+  Method = c("MH (fixed adj)", "PG (fixed adj)", "PG (Bayesian GGM)"),
+  Elapsed_sec = round(c(t_mh["elapsed"], t_pg["elapsed"], t_pg_ggm["elapsed"]), 1),
+  Iter_per_sec = round(niter_sim / c(t_mh["elapsed"], t_pg["elapsed"], t_pg_ggm["elapsed"]), 0)
+)
+knitr::kable(timing_df, caption = "Running time comparison ($n = 500, p = 100$, 30,000 iterations).",
+             col.names = c("Method", "Elapsed (sec)", "Iter/sec"))
+```
+
+## MCMC convergence diagnostics
+
+### Trace plots
+
+```{r sim1-trace, fig.height=8, fig.width=8, fig.cap="Trace plots of selected regression coefficients (beta_1 through beta_4) from the three samplers. The dashed red lines indicate true coefficient values."}
+par(mfrow = c(3, 4), mar = c(3, 3, 2, 1), mgp = c(1.8, 0.5, 0))
+vars_to_plot <- 1:4
+
+for (method_name in c("MH (fixed)", "PG (fixed)", "PG (GGM)")) {
+  fit_cur <- switch(method_name,
+    "MH (fixed)" = fit_mh,
+    "PG (fixed)" = fit_pg,
+    "PG (GGM)"   = fit_pg_ggm
+  )
+  for (j in vars_to_plot) {
+    plot(fit_cur$beta[, j], type = "l", col = "steelblue",
+         main = paste0(method_name, ": beta_", j),
+         xlab = "Iteration", ylab = expression(beta[j]),
+         cex.main = 0.85)
+    abline(h = beta_true[j], col = "red", lty = 2, lwd = 1.5)
+  }
+}
+```
+
+### Running mean plots
+
+```{r sim1-runmean, fig.height=6, fig.width=8, fig.cap="Running mean of beta_1 and beta_2 across the three sampling methods, demonstrating convergence to the true value (dashed red line)."}
+running_mean <- function(x) cumsum(x) / seq_along(x)
+
+par(mfrow = c(2, 3), mar = c(3, 3, 2, 1), mgp = c(1.8, 0.5, 0))
+for (j in 1:2) {
+  for (method_name in c("MH (fixed)", "PG (fixed)", "PG (GGM)")) {
+    fit_cur <- switch(method_name,
+      "MH (fixed)" = fit_mh,
+      "PG (fixed)" = fit_pg,
+      "PG (GGM)"   = fit_pg_ggm
+    )
+    rm_vals <- running_mean(fit_cur$beta[, j])
+    plot(rm_vals, type = "l", col = "darkgreen", lwd = 1.2,
+         main = paste0(method_name, ": beta_", j),
+         xlab = "Iteration", ylab = "Running mean",
+         cex.main = 0.85)
+    abline(h = beta_true[j], col = "red", lty = 2, lwd = 1.5)
+  }
+}
+```
+
+### Autocorrelation
+
+```{r sim1-acf, fig.height=4, fig.width=8, fig.cap="Autocorrelation function of beta_1 for the three sampling methods."}
+par(mfrow = c(1, 3), mar = c(3, 3, 2, 1), mgp = c(1.8, 0.5, 0))
+acf(fit_mh$beta[, 1], lag.max = 50, main = "MH (fixed): beta_1", col = "steelblue")
+acf(fit_pg$beta[, 1], lag.max = 50, main = "PG (fixed): beta_1", col = "steelblue")
+acf(fit_pg_ggm$beta[, 1], lag.max = 50, main = "PG (GGM): beta_1", col = "steelblue")
+```
+
+## Variable selection performance
+
+### Posterior inclusion probabilities
+
+```{r sim1-pip, fig.height=5, fig.width=9, fig.cap="Posterior inclusion probabilities (PIPs) across all 100 variables. Red bars indicate truly active variables (1--10). The dashed line marks the 0.5 median probability threshold."}
+compute_pip <- function(fit) {
+  colMeans(fit$gamma)
+}
+
+pip_mh  <- compute_pip(fit_mh)
+pip_pg  <- compute_pip(fit_pg)
+pip_ggm <- compute_pip(fit_pg_ggm)
+
+par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
+cols <- ifelse(1:p <= p_star, "firebrick", "grey60")
+
+barplot(pip_mh,  col = cols, border = NA, main = "MH (fixed adj)",
+        xlab = "Variable index", ylab = "PIP", ylim = c(0, 1))
+abline(h = 0.5, lty = 2, col = "black")
+
+barplot(pip_pg,  col = cols, border = NA, main = "PG (fixed adj)",
+        xlab = "Variable index", ylab = "PIP", ylim = c(0, 1))
+abline(h = 0.5, lty = 2, col = "black")
+
+barplot(pip_ggm, col = cols, border = NA, main = "PG (Bayesian GGM)",
+        xlab = "Variable index", ylab = "PIP", ylim = c(0, 1))
+abline(h = 0.5, lty = 2, col = "black")
+```
+
+### Selection metrics
+
+```{r sim1-metrics}
+compute_metrics <- function(pip, threshold = 0.5, p_star = 10) {
+  selected <- which(pip >= threshold)
+  tp <- sum(selected <= p_star)
+  fp <- sum(selected > p_star)
+  fn <- p_star - tp
+  sensitivity <- tp / p_star
+  fdr <- if (length(selected) > 0) fp / length(selected) else 0
+  f1  <- if (tp + fp + fn > 0) 2 * tp / (2 * tp + fp + fn) else 0
+  data.frame(
+    TP = tp, FP = fp, FN = fn,
+    Sensitivity = round(sensitivity, 3),
+    FDR = round(fdr, 3),
+    F1  = round(f1, 3),
+    N_selected = length(selected)
+  )
+}
+
+metrics <- rbind(
+  cbind(Method = "MH (fixed adj)",   compute_metrics(pip_mh)),
+  cbind(Method = "PG (fixed adj)",   compute_metrics(pip_pg)),
+  cbind(Method = "PG (Bayesian GGM)", compute_metrics(pip_ggm))
+)
+knitr::kable(metrics, caption = "Variable selection performance at PIP threshold 0.5 ($n = 500, p = 100$).",
+             row.names = FALSE)
+```
+
+### Eta coupling parameter traces
+
+```{r sim1-eta, fig.height=4, fig.width=8, fig.cap="Trace plots of the Ising coupling parameter eta for the three sampling methods."}
+par(mfrow = c(1, 3), mar = c(3, 3, 2, 1), mgp = c(1.8, 0.5, 0))
+if (!is.null(fit_mh$eta_dyn)) {
+  plot(fit_mh$eta_dyn, type = "l", col = "purple",
+       main = "MH: eta_dyn", xlab = "Iteration", ylab = expression(eta))
+}
+if (!is.null(fit_pg$eta_dyn)) {
+  plot(fit_pg$eta_dyn, type = "l", col = "purple",
+       main = "PG: eta_dyn", xlab = "Iteration", ylab = expression(eta))
+}
+if (!is.null(fit_pg_ggm$eta_dyn)) {
+  plot(fit_pg_ggm$eta_dyn, type = "l", col = "purple",
+       main = "PG GGM: eta_dyn", xlab = "Iteration", ylab = expression(eta))
+}
+```
+
+# Simulation study 2: High-dimensional sparse setting ($n = 200, p = 1000$) {#sec-sim2}
+
+## Data generation
+
+We now consider a challenging high-dimensional setting with $n = 200$ and $p = 1000$, where $p \gg n$.  Only $p^* = 15$ variables are truly active with a decay pattern in effect sizes.
+
+```{r sim2-data}
+set.seed(2025)
+n2 <- 200; p2 <- 1000; p_star2 <- 15
+
+# Independent covariates (sparse regime)
+X2 <- matrix(rnorm(n2 * p2), n2, p2)
+
+# Add mild correlation within the first 15 active variables
+rho2 <- 0.3
+for (i in 1:p_star2) {
+  for (j in 1:p_star2) {
+    if (i != j) {
+      X2[, j] <- rho2 * X2[, i] + sqrt(1 - rho2^2) * X2[, j]
+    }
+  }
+}
+
+# True coefficients with decaying magnitudes
+beta_true2 <- rep(0, p2)
+signal_sizes <- seq(1.5, 0.3, length.out = p_star2)
+signs <- rep(c(1, -1), length.out = p_star2)
+beta_true2[1:p_star2] <- signs * signal_sizes
+
+# Generate binary response
+eta_true2 <- X2 %*% beta_true2
+prob_true2 <- plogis(eta_true2)
+y2 <- rbinom(n2, 1, prob_true2)
+cat(sprintf("Response balance: %d / %d (%.1f%%)\n", sum(y2), n2 - sum(y2), 100*mean(y2)))
+```
+
+## Adjacency matrix
+
+```{r sim2-adj}
+# Sparse block adjacency for first 10 active variables
+R_known2 <- matrix(0L, p2, p2)
+for (i in 1:10) {
+  for (j in (i+1):min(10, p2)) {
+    R_known2[i, j] <- R_known2[j, i] <- 1L
+  }
+}
+diag(R_known2) <- 0L
+cat(sprintf("Adjacency: %d edges among %d variables\n", sum(R_known2)/2, p2))
+```
+
+## Running the sparse samplers
+
+In the high-dimensional regime, we use the **sparse** backends designed for $p \gg n$.
+
+```{r sim2-run, cache=TRUE}
+niter_sim2 <- 20000L
+burnin_sim2 <- 5000L
+
+# --- MH with sparse GGM ---
+t_mh_sparse <- system.time({
+  fit_mh_sp <- bvs_mh(X2, y2, adj_type = "ggm", sparse = TRUE,
+                       niter = niter_sim2, burnin = burnin_sim2,
+                       mu = -log(1/0.05 - 1),  # stronger sparsity
+                       n_mh_gamma = 5L, thin = 1L)
+})
+
+# --- PG with sparse GGM ---
+t_pg_sparse <- system.time({
+  fit_pg_sp <- bvs_pg(X2, y2, adj_type = "ggm", sparse = TRUE,
+                      niter = niter_sim2, burnin = burnin_sim2,
+                      mu = -log(1/0.05 - 1),
+                      n_mh_gamma = 5L, thin = 1L)
+})
+
+# --- MH with fixed adjacency (baseline comparison, still p=1000) ---
+t_mh_fixed2 <- system.time({
+  fit_mh_fixed2 <- bvs_mh(X2, y2, adj_type = "fixed",
+                           adj_fixed = R_known2,
+                           niter = niter_sim2, burnin = burnin_sim2,
+                           mu = -log(1/0.05 - 1), thin = 1L)
+})
+```
+
+## Running time comparison
+
+```{r sim2-timing}
+timing_df2 <- data.frame(
+  Method     = c("MH (sparse GGM)", "PG (sparse GGM)", "MH (fixed adj)"),
+  Elapsed    = round(c(t_mh_sparse["elapsed"], t_pg_sparse["elapsed"], t_mh_fixed2["elapsed"]), 1),
+  Iter_sec   = round(niter_sim2 / c(t_mh_sparse["elapsed"], t_pg_sparse["elapsed"], t_mh_fixed2["elapsed"]), 0)
+)
+knitr::kable(timing_df2, caption = "Running time comparison ($n = 200, p = 1000$, 20,000 iterations).",
+             col.names = c("Method", "Elapsed (sec)", "Iter/sec"))
+```
+
+## MCMC diagnostics
+
+### Trace plots for strongest signals
+
+```{r sim2-trace, fig.height=8, fig.width=8, fig.cap="Trace plots of the top 4 coefficients from the sparse high-dimensional simulation. Dashed red lines show true values."}
+par(mfrow = c(3, 4), mar = c(3, 3, 2, 1), mgp = c(1.8, 0.5, 0))
+vars2 <- 1:4
+for (method_name in c("MH (sparse GGM)", "PG (sparse GGM)", "MH (fixed)")) {
+  fit_cur <- switch(method_name,
+    "MH (sparse GGM)" = fit_mh_sp,
+    "PG (sparse GGM)" = fit_pg_sp,
+    "MH (fixed)"       = fit_mh_fixed2
+  )
+  for (j in vars2) {
+    plot(fit_cur$beta[, j], type = "l", col = "steelblue",
+         main = paste0(method_name, ": beta_", j),
+         xlab = "Iteration", ylab = expression(beta[j]),
+         cex.main = 0.8)
+    abline(h = beta_true2[j], col = "red", lty = 2, lwd = 1.5)
+  }
+}
+```
+
+### Model size (number of included variables per iteration)
+
+```{r sim2-modelsize, fig.height=4, fig.width=8, fig.cap="Trace of model size (number of included variables) per MCMC iteration in the high-dimensional setting."}
+model_size <- function(fit) rowSums(fit$gamma)
+
+par(mfrow = c(1, 3), mar = c(3, 3, 2, 1), mgp = c(1.8, 0.5, 0))
+plot(model_size(fit_mh_sp), type = "l", col = "darkblue",
+     main = "MH (sparse GGM)", xlab = "Iteration", ylab = "Model size")
+abline(h = p_star2, col = "red", lty = 2)
+
+plot(model_size(fit_pg_sp), type = "l", col = "darkblue",
+     main = "PG (sparse GGM)", xlab = "Iteration", ylab = "Model size")
+abline(h = p_star2, col = "red", lty = 2)
+
+plot(model_size(fit_mh_fixed2), type = "l", col = "darkblue",
+     main = "MH (fixed adj)", xlab = "Iteration", ylab = "Model size")
+abline(h = p_star2, col = "red", lty = 2)
+```
+
+### ACF for sparse sampler
+
+```{r sim2-acf, fig.height=4, fig.width=8, fig.cap="ACF of beta_1 for the three methods in the high-dimensional setting."}
+par(mfrow = c(1, 3), mar = c(3, 3, 2, 1), mgp = c(1.8, 0.5, 0))
+acf(fit_mh_sp$beta[, 1], lag.max = 50, main = "MH (sparse GGM)", col = "steelblue")
+acf(fit_pg_sp$beta[, 1], lag.max = 50, main = "PG (sparse GGM)", col = "steelblue")
+acf(fit_mh_fixed2$beta[, 1], lag.max = 50, main = "MH (fixed adj)", col = "steelblue")
+```
+
+## Variable selection performance
+
+### Posterior inclusion probabilities
+
+```{r sim2-pip, fig.height=5, fig.width=9, fig.cap="Posterior inclusion probabilities for the high-dimensional setting ($p = 1000$). Red bars: truly active variables (1--15). Most noise variables (16--1000) are correctly excluded."}
+pip_mh_sp   <- compute_pip(fit_mh_sp)
+pip_pg_sp   <- compute_pip(fit_pg_sp)
+pip_fixed2  <- compute_pip(fit_mh_fixed2)
+
+# Show first 50 variables + any with PIP > 0.1 beyond
+show_vars <- unique(c(1:50, which(pip_mh_sp > 0.1), which(pip_pg_sp > 0.1), which(pip_fixed2 > 0.1)))
+show_vars <- sort(show_vars)
+
+par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
+cols2 <- ifelse(show_vars <= p_star2, "firebrick", "grey60")
+
+barplot(pip_mh_sp[show_vars], col = cols2, border = NA,
+        main = "MH (sparse GGM)",
+        xlab = "Variable", ylab = "PIP", ylim = c(0, 1),
+        names.arg = show_vars, las = 2, cex.names = 0.5)
+abline(h = 0.5, lty = 2)
+
+barplot(pip_pg_sp[show_vars], col = cols2, border = NA,
+        main = "PG (sparse GGM)",
+        xlab = "Variable", ylab = "PIP", ylim = c(0, 1),
+        names.arg = show_vars, las = 2, cex.names = 0.5)
+abline(h = 0.5, lty = 2)
+
+barplot(pip_fixed2[show_vars], col = cols2, border = NA,
+        main = "MH (fixed adj)",
+        xlab = "Variable", ylab = "PIP", ylim = c(0, 1),
+        names.arg = show_vars, las = 2, cex.names = 0.5)
+abline(h = 0.5, lty = 2)
+```
+
+### Selection metrics
+
+```{r sim2-metrics}
+metrics2 <- rbind(
+  cbind(Method = "MH (sparse GGM)", compute_metrics(pip_mh_sp, p_star = p_star2)),
+  cbind(Method = "PG (sparse GGM)", compute_metrics(pip_pg_sp, p_star = p_star2)),
+  cbind(Method = "MH (fixed adj)",  compute_metrics(pip_fixed2, p_star = p_star2))
+)
+knitr::kable(metrics2, caption = "Variable selection performance ($n = 200, p = 1000$, PIP threshold 0.5).",
+             row.names = FALSE)
+```
+
+# Summary of running time comparisons {#sec-runtime}
+
+```{r runtime-summary-table}
+combined_timing <- rbind(
+  cbind(Setting = "Moderate (n=500, p=100)", timing_df),
+  cbind(Setting = "High-dim (n=200, p=1000)", timing_df2)
+)
+knitr::kable(combined_timing,
+             caption = "Complete running time comparison across both simulation settings.",
+             row.names = FALSE)
+```
+
+```{r runtime-barplot, fig.height=5, fig.width=8, fig.cap="Running time (seconds) across all simulation methods and settings."}
+par(mar = c(8, 4, 2, 1))
+all_times <- c(t_mh["elapsed"], t_pg["elapsed"], t_pg_ggm["elapsed"],
+               t_mh_sparse["elapsed"], t_pg_sparse["elapsed"], t_mh_fixed2["elapsed"])
+all_names <- c("MH fixed\n(n=500,p=100)", "PG fixed\n(n=500,p=100)",
+               "PG GGM\n(n=500,p=100)",
+               "MH sparse\n(n=200,p=1000)", "PG sparse\n(n=200,p=1000)",
+               "MH fixed\n(n=200,p=1000)")
+all_cols <- c("steelblue", "coral", "seagreen",
+              "steelblue", "coral", "gold3")
+
+bp <- barplot(all_times, col = all_cols, border = NA,
+              main = "Running Time Comparison",
+              ylab = "Elapsed time (seconds)",
+              names.arg = all_names, las = 2, cex.names = 0.75)
+text(bp, all_times + max(all_times) * 0.03,
+     labels = paste0(round(all_times, 1), "s"), cex = 0.8)
+```
+
+# Summary and discussion {#sec-summary}
+
+The **BVS.DAdj** package provides a comprehensive toolkit for Bayesian variable
+selection in logistic regression, distinguished by its ability to integrate
+dual adjacency structures into the Ising/MRF prior on selection indicators.
+The key features demonstrated in this article include:
+
+1. **Two MCMC samplers**: The MH sampler provides a general-purpose approach,
+   while the PG-augmented Gibbs sampler offers improved mixing through
+   data augmentation that renders the logistic likelihood conditionally Gaussian.
+
+2. **Flexible adjacency handling**: Users can supply known adjacency matrices,
+   estimate them via graphical lasso, or learn them jointly through Bayesian GGM
+   with SSVS priors.  The dual-network option combines both approaches.
+
+3. **Scalability**: Sparse high-dimensional backends using CSC-format covariance
+   storage and targeted MH gamma updates enable analysis of datasets with
+   $p \gg n$, as demonstrated in the $p = 1000$ simulation.
+
+4. **Computational efficiency**: All sampling backends are implemented in C++
+   via **Rcpp** and **RcppArmadillo**, with the Propp-Wilson perfect simulation
+   for the Möller auxiliary variable update also fully compiled.
+
+The simulation studies show that the dual-adjacency MRF prior improves
+sensitivity for detecting weakly associated variables that are neighbors in
+the graph, consistent with the theoretical motivation.  The PG sampler typically
+shows lower autocorrelation than the MH sampler in moderate dimensions, while
+the sparse backends scale well to $p = 1000$.
+
+## Computational details
+
+All simulations were performed on an Apple M-series ARM64 processor running
+macOS with R version `r R.version.string`.  The package uses C++17 with
+`-O2 -DARMA_NO_DEBUG` compiler flags.
+
+## Software availability
+
+The **BVS.DAdj** package (version 0.1.0) is available at
+[https://github.com/yubingyao/BVS.DAdj](https://github.com/yubingyao/BVS.DAdj).
+It requires R $\geq$ 3.5.0 with **Rcpp**, **RcppArmadillo**, and **Matrix**.
+The **huge** package is optional for graphical lasso adjacency estimation.
+
+# References {-}

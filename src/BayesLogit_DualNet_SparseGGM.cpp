@@ -1,0 +1,781 @@
+// [[Rcpp::depends(RcppArmadillo)]]
+#include <RcppArmadillo.h>
+#include <algorithm>
+#include <cmath>
+#include <random>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+namespace {
+
+
+// =============================================================================
+// SECTION 1: HELPER FUNCTIONS
+// =============================================================================
+
+static inline double calc_loglik(const arma::vec &y, const arma::vec &z,
+                                 double alpha) {
+  const arma::uword n = y.n_elem;
+  double term1 = 0.0, term2 = 0.0;
+  for (arma::uword i = 0; i < n; ++i) {
+    double x = alpha + z(i);
+    term1 += y(i) * x;
+    if (x > 0.0)
+      term2 += x + std::log1p(std::exp(-x));
+    else
+      term2 += std::log1p(std::exp(x));
+  }
+  return term1 - term2;
+}
+
+static inline double normal_pdf(double x, double mu, double sigma) {
+  double z = (x - mu) / sigma;
+  return std::exp(-0.5 * z * z) / (sigma * std::sqrt(2.0 * M_PI));
+}
+
+static inline double approx_erf(double x) {
+  double y = 1.0 / (1.0 + 0.3275911 * std::abs(x));
+  double val =
+      1.0 - (((((+1.061405429 * y - 1.453152027) * y + 1.421413741) * y -
+               0.284496736) *
+                  y +
+              0.254829592) *
+             y) *
+                std::exp(-x * x);
+  return (x >= 0.0) ? val : -val;
+}
+
+static inline double normal_cdf(double x, double mu, double sigma) {
+  return 0.5 * (1.0 + approx_erf((x - mu) / (sigma * std::sqrt(2.0))));
+}
+
+static inline double log_beta_pdf(double x, double a, double b) {
+  x = std::max(1e-12, std::min(1.0 - 1e-12, x));
+  return std::lgamma(a + b) - std::lgamma(a) - std::lgamma(b) +
+         (a - 1.0) * std::log(x) + (b - 1.0) * std::log(1.0 - x);
+}
+
+// =============================================================================
+// SECTION 2: SPARSE GRAPH STRUCTURE (for GGM sample covariance)
+// =============================================================================
+struct SparseGraph {
+  std::vector<std::vector<int>> adj;
+  std::vector<std::vector<double>> val;
+  int p;
+
+  SparseGraph(int nodes) : p(nodes) {
+    adj.resize(p);
+    val.resize(p);
+  }
+
+  void sort_indices() {
+    for (int i = 0; i < p; ++i) {
+      int d = (int)adj[i].size();
+      if (d > 1) {
+        std::vector<std::pair<int, double>> temp(d);
+        for (int k = 0; k < d; ++k)
+          temp[k] = std::make_pair(adj[i][k], val[i][k]);
+        std::sort(temp.begin(), temp.end());
+        for (int k = 0; k < d; ++k) {
+          adj[i][k] = temp[k].first;
+          val[i][k] = temp[k].second;
+        }
+      }
+    }
+  }
+};
+
+// =============================================================================
+// SECTION 3: SPARSE DUAL-NETWORK PROPP-WILSON
+//
+// Kernel combines eta1 * Z_active (dynamic GGM) + eta2 * R_fix (fixed).
+// Cost: O(p × (avg_deg_dyn + avg_deg_fix)) instead of O(p²).
+// FIX: Accepts pre-allocated workspace to avoid 8×p heap allocs per Möller.
+// OPT: Binary x values → conditional eta add (no multiply).
+// =============================================================================
+static void
+proppwilson_dual_sparse(const std::vector<std::unordered_set<int>> &Z_active,
+                        const std::vector<std::vector<int>> &R_fix_adj, int p,
+                        double mu, double eta1, double eta2, unsigned int T_max,
+                        std::vector<int> &x_up, std::vector<int> &x_down,
+                        std::vector<int> &result) {
+  unsigned int T = 2;
+
+  int seed_base = static_cast<int>(std::floor(R::runif(0.0, 1.0) * 1000.0)) + 1;
+
+  auto not_coalesced = [&]() {
+    for (int k = 0; k < p; ++k)
+      if (x_up[k] != x_down[k])
+        return true;
+    return false;
+  };
+
+  // Initialize
+  for (int k = 0; k < p; ++k) {
+    x_up[k] = 0;
+    x_down[k] = 1;
+  }
+
+  while (not_coalesced()) {
+    for (int k = 0; k < p; ++k) {
+      x_up[k] = 0;
+      x_down[k] = 1;
+    }
+
+    for (int t = -(int)T; t <= -1; ++t) {
+      int seed2 = -t * seed_base;
+      std::mt19937 gen(seed2);
+      std::uniform_real_distribution<double> unif01(0.0, 1.0);
+
+      for (int i = 0; i < p; ++i) {
+        double ker_up = 0.0, ker_down = 0.0;
+        // Dynamic GGM neighbors (eta1) — binary conditional add
+        for (int j : Z_active[i]) {
+          if (x_up[j])
+            ker_up += eta1;
+          if (x_down[j])
+            ker_down += eta1;
+        }
+        // Fixed external neighbors (eta2) — binary conditional add
+        for (int j : R_fix_adj[i]) {
+          if (x_up[j])
+            ker_up += eta2;
+          if (x_down[j])
+            ker_down += eta2;
+        }
+        double pi_up = 1.0 / (1.0 + std::exp(-(mu + ker_up)));
+        double pi_down = 1.0 / (1.0 + std::exp(-(mu + ker_down)));
+
+        double u = unif01(gen);
+        x_up[i] = (pi_up > u) ? 1 : 0;
+        x_down[i] = (pi_down > u) ? 1 : 0;
+      }
+    }
+
+    T = 2 * T;
+
+    if (T >= T_max) {
+      std::vector<int> diff_idx;
+      for (int k = 0; k < p; ++k)
+        if (x_up[k] != x_down[k])
+          diff_idx.push_back(k);
+
+      std::mt19937 gen_fb(seed_base + 99999);
+      std::uniform_real_distribution<double> unif01_fb(0.0, 1.0);
+      for (int sweep = 0; sweep < 100; ++sweep) {
+        for (int idx = 0; idx < (int)diff_idx.size(); ++idx) {
+          int m = diff_idx[idx];
+          double ker = 0.0;
+          for (int j : Z_active[m])
+            if (x_up[j])
+              ker += eta1;
+          for (int j : R_fix_adj[m])
+            if (x_up[j])
+              ker += eta2;
+          double prob = 1.0 / (1.0 + std::exp(-(mu + ker)));
+          x_up[m] = (unif01_fb(gen_fb) < prob) ? 1 : 0;
+        }
+      }
+      for (int k = 0; k < p; ++k)
+        x_down[k] = x_up[k];
+    }
+  }
+
+  // Copy result
+  for (int k = 0; k < p; ++k)
+    result[k] = x_up[k];
+}
+
+// =============================================================================
+// SECTION 4: SPARSE DUAL-ETA MOLLER MH UPDATE
+//
+// Updates eta1, eta2 independently. 4 Propp-Wilson calls.
+// Sufficient stats: O(|E_dyn| + |E_fix|) not O(p²).
+// FIX: Pre-allocated PW workspace eliminates 8×p allocs per call.
+// =============================================================================
+static void moller_update_dual_sparse(
+    const std::vector<std::unordered_set<int>> &Z_active,
+    const std::vector<std::vector<int>> &R_fix_adj, int p, double mu,
+    double &eta1, double &eta2, double eta1_sd, double eta2_sd, double mu_tilde,
+    double eta1_tilde, double eta2_tilde, const arma::uvec &gamma, double e,
+    double f, unsigned int T_max, int proposal_type,
+    // Pre-allocated PW workspace buffers
+    std::vector<int> &pw_x_up, std::vector<int> &pw_x_down,
+    std::vector<int> &om1, std::vector<int> &om2, std::vector<int> &om1n,
+    std::vector<int> &om2n) {
+  double eta1_new, eta2_new;
+  double log_prop_ratio_eta1 = 0.0, log_prop_ratio_eta2 = 0.0;
+
+  if (proposal_type == 0) {
+    double a1 = std::max(0.0, eta1 - 0.01);
+    double b1 = std::min(eta1_sd, eta1 + 0.01);
+    eta1_new = R::runif(a1, b1);
+    double c1 = std::max(0.0, eta1_new - 0.01);
+    double d1 = std::min(eta1_sd, eta1_new + 0.01);
+    log_prop_ratio_eta1 = std::log(b1 - a1) - std::log(d1 - c1);
+
+    double a2 = std::max(0.0, eta2 - 0.01);
+    double b2 = std::min(eta2_sd, eta2 + 0.01);
+    eta2_new = R::runif(a2, b2);
+    double c2 = std::max(0.0, eta2_new - 0.01);
+    double d2 = std::min(eta2_sd, eta2_new + 0.01);
+    log_prop_ratio_eta2 = std::log(b2 - a2) - std::log(d2 - c2);
+  } else {
+    int attempts = 0;
+    do {
+      eta1_new = R::rnorm(eta1, eta1_sd);
+      if (++attempts > 10000) {
+        eta1_new = eta1;
+        break;
+      }
+    } while (eta1_new <= 0.0 || eta1_new >= eta1_sd);
+
+    attempts = 0;
+    do {
+      eta2_new = R::rnorm(eta2, eta2_sd);
+      if (++attempts > 10000) {
+        eta2_new = eta2;
+        break;
+      }
+    } while (eta2_new <= 0.0 || eta2_new >= eta2_sd);
+
+    double log_q_fwd_1 = std::log(normal_pdf(eta1_new, eta1, eta1_sd)) -
+                         std::log(normal_cdf(eta1_sd, eta1, eta1_sd) -
+                                  normal_cdf(0.0, eta1, eta1_sd));
+    double log_q_rev_1 = std::log(normal_pdf(eta1, eta1_new, eta1_sd)) -
+                         std::log(normal_cdf(eta1_sd, eta1_new, eta1_sd) -
+                                  normal_cdf(0.0, eta1_new, eta1_sd));
+    log_prop_ratio_eta1 = log_q_rev_1 - log_q_fwd_1;
+
+    double log_q_fwd_2 = std::log(normal_pdf(eta2_new, eta2, eta2_sd)) -
+                         std::log(normal_cdf(eta2_sd, eta2, eta2_sd) -
+                                  normal_cdf(0.0, eta2, eta2_sd));
+    double log_q_rev_2 = std::log(normal_pdf(eta2, eta2_new, eta2_sd)) -
+                         std::log(normal_cdf(eta2_sd, eta2_new, eta2_sd) -
+                                  normal_cdf(0.0, eta2_new, eta2_sd));
+    log_prop_ratio_eta2 = log_q_rev_2 - log_q_fwd_2;
+  }
+
+  eta1_new = std::max(1e-8, std::min(eta1_sd - 1e-8, eta1_new));
+  eta2_new = std::max(1e-8, std::min(eta2_sd - 1e-8, eta2_new));
+
+  // 4 PW calls using pre-allocated workspace
+  proppwilson_dual_sparse(Z_active, R_fix_adj, p, mu, eta1, eta2, T_max,
+                          pw_x_up, pw_x_down, om1);
+  proppwilson_dual_sparse(Z_active, R_fix_adj, p, mu, eta1, eta2, T_max,
+                          pw_x_up, pw_x_down, om2);
+  proppwilson_dual_sparse(Z_active, R_fix_adj, p, mu, eta1_new, eta2, T_max,
+                          pw_x_up, pw_x_down, om1n);
+  proppwilson_dual_sparse(Z_active, R_fix_adj, p, mu, eta1, eta2_new, T_max,
+                          pw_x_up, pw_x_down, om2n);
+
+  // Sufficient stats — sums
+  int sum_om1 = 0, sum_om2 = 0, sum_om1n = 0, sum_om2n = 0;
+  for (int j = 0; j < p; ++j) {
+    sum_om1 += om1[j];
+    sum_om2 += om2[j];
+    sum_om1n += om1n[j];
+    sum_om2n += om2n[j];
+  }
+
+  // Sufficient stats — edge products for dynamic GGM network (R1)
+  int B_R1 = 0;
+  int A_om1_R1 = 0, A_om1n_R1 = 0, A_om2_R1 = 0, A_om2n_R1 = 0;
+  for (int j = 0; j < p; ++j) {
+    for (int k : Z_active[j]) {
+      if (k <= j)
+        continue;
+      int gj = (int)gamma(j), gk = (int)gamma(k);
+      B_R1 += gj * gk;
+      A_om1_R1 += om1[j] * om1[k];
+      A_om1n_R1 += om1n[j] * om1n[k];
+      A_om2_R1 += om2[j] * om2[k];
+      A_om2n_R1 += om2n[j] * om2n[k];
+    }
+  }
+
+  // Sufficient stats — edge products for fixed network (R2)
+  int B_R2 = 0;
+  int A_om1_R2 = 0, A_om1n_R2 = 0, A_om2_R2 = 0, A_om2n_R2 = 0;
+  for (int j = 0; j < p; ++j) {
+    for (int k : R_fix_adj[j]) {
+      if (k <= j)
+        continue;
+      int gj = (int)gamma(j), gk = (int)gamma(k);
+      B_R2 += gj * gk;
+      A_om1_R2 += om1[j] * om1[k];
+      A_om1n_R2 += om1n[j] * om1n[k];
+      A_om2_R2 += om2[j] * om2[k];
+      A_om2n_R2 += om2n[j] * om2n[k];
+    }
+  }
+
+  // --- eta1 MH ---
+  double log_prior_eta1 = log_beta_pdf(eta1_new / eta1_sd, e, f) -
+                          log_beta_pdf(eta1 / eta1_sd, e, f);
+  double log_target_eta1 = (eta1_new - eta1) * B_R1 + log_prior_eta1;
+  double log_aux_eta1 = mu_tilde * (sum_om1n - sum_om1) +
+                        eta1_tilde * (A_om1n_R1 - A_om1_R1) +
+                        eta2_tilde * (A_om1n_R2 - A_om1_R2);
+  double log_norm_eta1 = mu * (sum_om1 - sum_om1n) + eta1 * A_om1_R1 -
+                         eta1_new * A_om1n_R1 + eta2 * (A_om1_R2 - A_om1n_R2);
+  double log_MH_eta1 =
+      log_target_eta1 + log_aux_eta1 + log_norm_eta1 + log_prop_ratio_eta1;
+
+  // --- eta2 MH ---
+  double log_prior_eta2 = log_beta_pdf(eta2_new / eta2_sd, e, f) -
+                          log_beta_pdf(eta2 / eta2_sd, e, f);
+  double log_target_eta2 = (eta2_new - eta2) * B_R2 + log_prior_eta2;
+  double log_aux_eta2 = mu_tilde * (sum_om2n - sum_om2) +
+                        eta1_tilde * (A_om2n_R1 - A_om2_R1) +
+                        eta2_tilde * (A_om2n_R2 - A_om2_R2);
+  double log_norm_eta2 = mu * (sum_om2 - sum_om2n) + eta2 * A_om2_R2 -
+                         eta2_new * A_om2n_R2 + eta1 * (A_om2_R1 - A_om2n_R1);
+  double log_MH_eta2 =
+      log_target_eta2 + log_aux_eta2 + log_norm_eta2 + log_prop_ratio_eta2;
+
+  if (std::log(R::runif(0.0, 1.0)) < log_MH_eta1)
+    eta1 = eta1_new;
+  if (std::log(R::runif(0.0, 1.0)) < log_MH_eta2)
+    eta2 = eta2_new;
+}
+
+
+} // anonymous namespace
+// =============================================================================
+// SECTION 5: MAIN FUNCTION
+//
+// Memory: O(n*p + p*d_max^2 + |E_dyn| + |E_fix|) instead of O(n*p + p^2)
+// =============================================================================
+
+// [[Rcpp::export]]
+Rcpp::List BayesLogit_DualNet_SparseGGM(
+    const arma::mat &X, const arma::vec &y,
+    const Rcpp::IntegerVector &S_i, const Rcpp::IntegerVector &S_p_csc,
+    const Rcpp::NumericVector &S_x, const Rcpp::NumericVector &S_diag,
+    const Rcpp::IntegerMatrix &R_fix_int,
+    int p_ggm, int niter, int burnin,
+    double mu, double nu0, double sigmasq0, double alpha0, double beta0,
+    double h, double e, double f,
+    double v0_ggm, double v1_ggm, double pii_ggm,
+    double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde,
+    double eta2_tilde, unsigned int T_max, int proposal_type,
+    int thin = 1,
+    Rcpp::Nullable<Rcpp::NumericVector> beta_in = R_NilValue,
+    Rcpp::Nullable<Rcpp::IntegerVector> gamma_in = R_NilValue,
+    double alpha_in = 0.0) {
+  Rcpp::RNGScope scope;
+
+  const arma::uword n = X.n_rows;
+  const arma::uword p = X.n_cols;
+  if ((int)p != p_ggm)
+    Rcpp::stop("p_ggm (%d) must match ncol(X) (%d)", p_ggm, (int)p);
+  if ((arma::uword)R_fix_int.nrow() != p || (arma::uword)R_fix_int.ncol() != p)
+    Rcpp::stop("R_fix dimensions must match p = %d", (int)p);
+  if (thin < 1)
+    thin = 1;
+
+  // =========================================================================
+  // 1. BUILD SPARSE STRUCTURES
+  // =========================================================================
+
+  // --- GGM sparse graph from CSC ---
+  SparseGraph G(p);
+  for (int col = 0; col < (int)p; ++col) {
+    for (int k = S_p_csc[col]; k < S_p_csc[col + 1]; ++k) {
+      int row = S_i[k];
+      G.adj[col].push_back(row);
+      G.val[col].push_back(S_x[k]);
+    }
+  }
+  G.sort_indices();
+
+  int d_max = 0;
+  for (int i = 0; i < (int)p; ++i) {
+    int d = (int)G.adj[i].size();
+    if (d > d_max)
+      d_max = d;
+  }
+
+  // Neighbor index hash map (for A_sub off-diagonal O(1) lookup)
+  std::vector<std::unordered_map<int, int>> nbr_idx_map(p);
+  for (int i = 0; i < (int)p; ++i) {
+    const std::vector<int> &nbrs = G.adj[i];
+    for (int k = 0; k < (int)nbrs.size(); ++k)
+      nbr_idx_map[i][nbrs[k]] = k;
+  }
+
+  // --- Fixed adjacency → sorted neighbor lists ---
+  // FIX: Still O(p²) scan at init (unavoidable for dense IntegerMatrix input)
+  //      but only done once. For very large p, pass sparse CSC instead.
+  std::vector<std::vector<int>> R_fix_adj(p);
+  for (int i = 0; i < (int)p; ++i) {
+    for (int j = 0; j < (int)p; ++j) {
+      if (R_fix_int(i, j) != 0)
+        R_fix_adj[i].push_back(j);
+    }
+  }
+
+  // =========================================================================
+  // 2. INITIALIZATION
+  // =========================================================================
+  arma::vec beta_vec(p, arma::fill::zeros);
+  arma::uvec gamma(p, arma::fill::zeros);
+  if (beta_in.isNotNull())
+    beta_vec = Rcpp::as<arma::vec>(beta_in);
+  if (gamma_in.isNotNull())
+    gamma = Rcpp::as<arma::uvec>(gamma_in);
+
+  double alpha = alpha_in;
+  double sigmasq = 1.0;
+  double eta1 = std::min(0.01, eta1_sd * 0.5);
+  double eta2 = std::min(0.01, eta2_sd * 0.5);
+
+  arma::vec z = X * beta_vec;
+  double loglik = calc_loglik(y, z, alpha);
+
+  // Sparse GGM edge state
+  std::vector<std::unordered_set<int>> Z_active(p);
+  int n_edges = 0;
+  for (int i = 0; i < (int)p; ++i)
+    for (int nbr : G.adj[i])
+      Z_active[i].insert(nbr);
+  for (int i = 0; i < (int)p; ++i)
+    for (int nbr : Z_active[i])
+      if (nbr > i)
+        n_edges++;
+
+  // GGM pre-allocated buffers (max-degree sized)
+  arma::mat A_sub, U_ggm;
+  arma::vec s_ggm, noise_ggm, v_ggm;
+  // FIX: Ud_work allocated once — avoids d×d copy per node in GGM sweep
+  arma::mat Ud_work;
+  if (d_max > 0) {
+    A_sub.set_size(d_max, d_max);
+    U_ggm.set_size(d_max, d_max);
+    Ud_work.set_size(d_max, d_max);
+    s_ggm.set_size(d_max);
+    noise_ggm.set_size(d_max);
+    v_ggm.set_size(d_max);
+  }
+
+  // Pre-computed SSVS constants
+  double log_pii_ggm = std::log(pii_ggm);
+  double log_1_pii_ggm = std::log(1.0 - pii_ggm);
+  double log_v0_half = -0.5 * std::log(v0_ggm);
+  double log_v1_half = -0.5 * std::log(v1_ggm);
+  double inv_v0 = 1.0 / v0_ggm;
+  double inv_v1 = 1.0 / v1_ggm;
+
+  // Logistic pre-allocated buffers
+  arma::vec z_prop(n);
+  std::vector<arma::uword> active_idx;
+  active_idx.reserve(p);
+
+  // Propp-Wilson pre-allocated workspace (shared by all 4 PW calls)
+  std::vector<int> pw_x_up(p), pw_x_down(p);
+  std::vector<int> pw_om1(p), pw_om2(p), pw_om1n(p), pw_om2n(p);
+
+  // Output storage
+  int n_save = niter / thin;
+  arma::mat beta_out(n_save, p);
+  arma::umat gamma_out(n_save, p);
+  arma::vec eta1_out(n_save), eta2_out(n_save);
+  arma::vec alpha_out(n_save);
+  arma::vec sigmasq_out(n_save);
+  Rcpp::List Z_list(n_save);
+
+  std::vector<int> edge_rows, edge_cols;
+  edge_rows.reserve(std::max(1000, n_edges));
+  edge_cols.reserve(std::max(1000, n_edges));
+
+  // =========================================================================
+  // 3. MCMC LOOP
+  // =========================================================================
+  const int total_iter = niter + burnin;
+  for (int iter = 0; iter < total_iter; ++iter) {
+
+    if (iter > 0 && iter % 10000 == 0) {
+      Rcpp::checkUserInterrupt();
+      int model_size = (int)arma::accu(gamma);
+      Rcpp::Rcout << "Iter: " << iter << " | Model: " << model_size
+                  << " | Edges: " << n_edges << " | eta1: " << eta1
+                  << " | eta2: " << eta2 << "\n";
+    }
+
+    // OPT: Pre-compute sqrt(sigmasq) once per iteration
+    double sd_sig = std::sqrt(sigmasq);
+
+    // -----------------------------------------------------------------------
+    // STEP A: Sparse GGM Column Sweep (Wang et al. 2012 via SSVS)
+    // FIX: Ud_work written in-place — no d×d copy per node
+    // -----------------------------------------------------------------------
+    if (d_max > 0) {
+      for (int i = 0; i < (int)p; ++i) {
+        const std::vector<int> &neighbors = G.adj[i];
+        int d = (int)neighbors.size();
+        if (d < 1)
+          continue;
+
+        // Build d×d submatrix in-place
+        for (int r = 0; r < d; ++r) {
+          int u = neighbors[r];
+          A_sub(r, r) = S_diag[u];
+          for (int c = r + 1; c < d; ++c) {
+            int v = neighbors[c];
+            double w = 0.0;
+            auto it = nbr_idx_map[u].find(v);
+            if (it != nbr_idx_map[u].end())
+              w = G.val[u][it->second];
+            A_sub(r, c) = w;
+            A_sub(c, r) = w;
+          }
+        }
+
+        // Add 1/v_k based on edge state
+        for (int k = 0; k < d; ++k) {
+          int nbr = neighbors[k];
+          bool active = (Z_active[i].count(nbr) > 0);
+          double v_val = active ? v1_ggm : v0_ggm;
+          v_ggm(k) = v_val;
+          A_sub(k, k) += (1.0 / v_val);
+        }
+
+        // Single Cholesky in-place on A_sub → U_ggm
+        arma::mat A_chol_tmp = A_sub.submat(0, 0, d - 1, d - 1);
+        arma::mat U_chol_tmp;
+        bool ok = arma::chol(U_chol_tmp, arma::symmatu(A_chol_tmp));
+        if (!ok) {
+          for (int k = 0; k < d; ++k)
+            A_sub(k, k) += 1e-5;
+          A_chol_tmp = A_sub.submat(0, 0, d - 1, d - 1);
+          ok = arma::chol(U_chol_tmp, arma::symmatu(A_chol_tmp));
+          if (!ok)
+            continue;
+        }
+
+        // FIX: Copy Cholesky result into pre-allocated Ud_work (no new alloc)
+        for (int r2 = 0; r2 < d; ++r2)
+          for (int c2 = r2; c2 < d; ++c2)
+            Ud_work(r2, c2) = U_ggm(r2, c2);
+
+        for (int k = 0; k < d; ++k)
+          s_ggm(k) = G.val[i][k];
+
+        // Solve via Cholesky: mu = A^{-1}(-s)
+        arma::vec neg_s = -s_ggm.head(d);
+        arma::mat Ud_view(Ud_work.memptr(), d, d, false, true); // no-copy view
+        arma::vec y_tmp = arma::solve(arma::trimatl(Ud_view.t()), neg_s,
+                                      arma::solve_opts::fast);
+        arma::vec mu_sub =
+            arma::solve(arma::trimatu(Ud_view), y_tmp, arma::solve_opts::fast);
+
+        // Sample: beta = mu + U^{-1} * noise
+        for (int k = 0; k < d; ++k)
+          noise_ggm(k) = R::rnorm(0.0, 1.0);
+        arma::vec delta = arma::solve(arma::trimatu(Ud_view), noise_ggm.head(d),
+                                      arma::solve_opts::fast);
+        arma::vec b_ggm = mu_sub + delta;
+
+        // SSVS edge selection with incremental edge tracking
+        for (int k = 0; k < d; ++k) {
+          double b2 = b_ggm(k) * b_ggm(k);
+          double w1 = log_v0_half - 0.5 * b2 * inv_v0 + log_1_pii_ggm;
+          double w2 = log_v1_half - 0.5 * b2 * inv_v1 + log_pii_ggm;
+          double w_max = std::max(w1, w2);
+          double prob = std::exp(w2 - w_max) /
+                        (std::exp(w1 - w_max) + std::exp(w2 - w_max));
+
+          int nbr = neighbors[k];
+          bool was_active = (Z_active[i].count(nbr) > 0);
+          bool now_active = (R::runif(0, 1) < prob);
+
+          if (now_active && !was_active) {
+            Z_active[i].insert(nbr);
+            Z_active[nbr].insert(i);
+            n_edges++;
+          } else if (!now_active && was_active) {
+            Z_active[i].erase(nbr);
+            Z_active[nbr].erase(i);
+            n_edges--;
+          }
+        }
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // STEP B: Gamma — dual-network Ising prior
+    //   P(γ_j | γ_{-j}) ∝ exp(μ + η₁·neigh_dyn + η₂·neigh_fix)
+    // OPT: Uses pre-computed sd_sig
+    // -----------------------------------------------------------------------
+    for (arma::uword kk = 0; kk < 5; ++kk) {
+      arma::uword j =
+          static_cast<arma::uword>(std::floor(R::runif(0.0, (double)p)));
+      if (j >= p)
+        j = p - 1;
+
+      int g_curr = gamma(j);
+      int g_prop = 1 - g_curr;
+      double b_curr = beta_vec(j);
+      double b_prop = (g_prop == 1) ? R::rnorm(beta0, sd_sig) : 0.0;
+
+      z_prop = z + (b_prop - b_curr) * X.col(j);
+      double ll_prop = calc_loglik(y, z_prop, alpha);
+
+      double diff = static_cast<double>(g_prop - g_curr);
+      double neigh_dyn = 0.0;
+      for (int nbr : Z_active[j])
+        neigh_dyn += gamma(nbr);
+      double neigh_fix = 0.0;
+      for (int nbr : R_fix_adj[j])
+        neigh_fix += gamma(nbr);
+
+      double ising_diff = diff * (mu + eta1 * neigh_dyn + eta2 * neigh_fix);
+      double log_ratio = (ll_prop - loglik) + ising_diff;
+
+      if (std::log(R::runif(0, 1)) < log_ratio) {
+        gamma(j) = g_prop;
+        beta_vec(j) = b_prop;
+        z = z_prop;
+        loglik = ll_prop;
+      }
+    }
+
+    // Build active indices
+    active_idx.clear();
+    for (arma::uword j = 0; j < p; ++j)
+      if (gamma(j) == 1)
+        active_idx.push_back(j);
+
+    // -----------------------------------------------------------------------
+    // STEP C: Beta (Metropolis for active variables)
+    // OPT: Uses pre-computed sd_sig
+    // -----------------------------------------------------------------------
+    {
+      double sd_beta = sd_sig * 0.1;
+      for (arma::uword k = 0; k < active_idx.size(); ++k) {
+        arma::uword j = active_idx[k];
+        double b_prop = R::rnorm(beta_vec(j), sd_beta);
+        z_prop = z + (b_prop - beta_vec(j)) * X.col(j);
+        double ll_prop = calc_loglik(y, z_prop, alpha);
+        double pr_curr = -0.5 * std::pow(beta_vec(j) - beta0, 2) / sigmasq;
+        double pr_prop = -0.5 * std::pow(b_prop - beta0, 2) / sigmasq;
+        if (std::log(R::runif(0, 1)) <
+            (ll_prop - loglik) + (pr_prop - pr_curr)) {
+          beta_vec(j) = b_prop;
+          z = z_prop;
+          loglik = ll_prop;
+        }
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // STEP D: Alpha
+    // OPT: Uses pre-computed sd_sig
+    // -----------------------------------------------------------------------
+    {
+      double sd_alpha = std::sqrt(h) * sd_sig;
+      double a_prop = R::rnorm(alpha, sd_alpha);
+      double ll_a_prop = calc_loglik(y, z, a_prop);
+      double pr_a_curr = -0.5 * std::pow(alpha - alpha0, 2) / (h * sigmasq);
+      double pr_a_prop = -0.5 * std::pow(a_prop - alpha0, 2) / (h * sigmasq);
+      if (std::log(R::runif(0, 1)) <
+          (ll_a_prop - loglik) + (pr_a_prop - pr_a_curr)) {
+        alpha = a_prop;
+        loglik = ll_a_prop;
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // STEP E: SigmaSq
+    // -----------------------------------------------------------------------
+    {
+      double sig_prop = std::exp(std::log(sigmasq) + R::rnorm(0, 0.2));
+      sig_prop = std::max(sig_prop, 1e-10);
+
+      double shape = nu0 / 2.0;
+      double scale = sigmasq0 * nu0 / 2.0;
+      double lp_sig_curr = -(shape + 1.0) * std::log(sigmasq) - scale / sigmasq;
+      double lp_sig_prop =
+          -(shape + 1.0) * std::log(sig_prop) - scale / sig_prop;
+
+      double n_active_beta = (double)active_idx.size();
+      double ss_beta = 0.0;
+      for (arma::uword k = 0; k < active_idx.size(); ++k) {
+        double d2 = beta_vec(active_idx[k]) - beta0;
+        ss_beta += d2 * d2;
+      }
+
+      double lp_beta_curr =
+          -0.5 * n_active_beta * std::log(sigmasq) - 0.5 * ss_beta / sigmasq;
+      double lp_beta_prop =
+          -0.5 * n_active_beta * std::log(sig_prop) - 0.5 * ss_beta / sig_prop;
+
+      double lp_alpha_curr = -0.5 * std::log(h * sigmasq) -
+                             0.5 * std::pow(alpha - alpha0, 2) / (h * sigmasq);
+      double lp_alpha_prop = -0.5 * std::log(h * sig_prop) -
+                             0.5 * std::pow(alpha - alpha0, 2) / (h * sig_prop);
+
+      double log_mh_sig = (lp_sig_prop - lp_sig_curr) +
+                          (lp_beta_prop - lp_beta_curr) +
+                          (lp_alpha_prop - lp_alpha_curr) +
+                          (std::log(sig_prop) - std::log(sigmasq));
+      if (std::log(R::runif(0, 1)) < log_mh_sig)
+        sigmasq = sig_prop;
+    }
+
+    // -----------------------------------------------------------------------
+    // STEP F: Dual-eta Möller + sparse Propp-Wilson
+    // FIX: Passes pre-allocated PW workspace
+    // -----------------------------------------------------------------------
+    moller_update_dual_sparse(
+        Z_active, R_fix_adj, (int)p, mu, eta1, eta2, eta1_sd, eta2_sd, mu_tilde,
+        eta1_tilde, eta2_tilde, gamma, e, f, T_max, proposal_type, pw_x_up,
+        pw_x_down, pw_om1, pw_om2, pw_om1n, pw_om2n);
+
+    // -----------------------------------------------------------------------
+    // STORE SAMPLES
+    // -----------------------------------------------------------------------
+    if (iter >= burnin && (iter - burnin) % thin == 0) {
+      int s = (iter - burnin) / thin;
+      if (s < n_save) {
+        beta_out.row(s) = beta_vec.t();
+        for (arma::uword j = 0; j < p; ++j)
+          gamma_out(s, j) = gamma(j);
+        eta1_out(s) = eta1;
+        eta2_out(s) = eta2;
+        alpha_out(s) = alpha;
+        sigmasq_out(s) = sigmasq;
+
+        edge_rows.clear();
+        edge_cols.clear();
+        for (int c = 0; c < (int)p; ++c) {
+          for (int r : Z_active[c]) {
+            if (r < c) {
+              edge_rows.push_back(r);
+              edge_cols.push_back(c);
+            }
+          }
+        }
+        int ne = (int)edge_rows.size();
+        if (ne > 0) {
+          Rcpp::IntegerMatrix edges(ne, 2);
+          for (int ei = 0; ei < ne; ++ei) {
+            edges(ei, 0) = edge_rows[ei];
+            edges(ei, 1) = edge_cols[ei];
+          }
+          Z_list[s] = edges;
+        } else {
+          Z_list[s] = Rcpp::IntegerMatrix(0, 2);
+        }
+      }
+    }
+  }
+
+  return Rcpp::List::create(
+      Rcpp::Named("beta") = beta_out, Rcpp::Named("gamma") = gamma_out,
+      Rcpp::Named("eta1") = eta1_out, Rcpp::Named("eta2") = eta2_out,
+      Rcpp::Named("alpha") = alpha_out, Rcpp::Named("sigmasq") = sigmasq_out,
+      Rcpp::Named("Z_list") = Z_list);
+}

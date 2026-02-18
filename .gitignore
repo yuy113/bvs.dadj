@@ -1,0 +1,46 @@
+# R CMD check output
+*.Rcheck/
+BVS.DAdj.Rcheck/
+
+# Backup files
+*.cpp.bak
+*.cpp.orig
+
+# R package build artifacts
+*.o
+*.so
+*.dll
+*.dylib
+src/*.o
+src/*.so
+src/RcppExports.o
+*.tar.gz
+
+# R session files
+.Rhistory
+.Rdata
+.RData
+.Ruserdata
+.Rproj.user
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+Thumbs.db
+
+# Compiled vignettes
+inst/doc/
+
+# Byte-compiled R files
+*.rdb
+*.rdx
+
+# Temporary fix scripts
+fix_sparse.py
+fix_comments.py
+
+# Cache
+*_cache/

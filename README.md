@@ -18,7 +18,7 @@ MCMC methods for Bayesian variable selection in logistic regression with Ising/M
 
 ```r
 # Install from GitHub
-devtools::install_github("yubingyao/BVS.DAdj")
+devtools::install_github("yuy113/BVS.DAdj")
 ```
 
 ### Dependencies

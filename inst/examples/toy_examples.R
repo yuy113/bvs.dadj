@@ -1,12 +1,13 @@
 # ========================================================================
-# BayesVarSel: Toy Examples
+# BVS.DAdj: Toy Examples
 # ========================================================================
 # These examples use small n, p, niter to run quickly for demonstration.
 # For real analysis, increase niter (e.g. 60,000+) and use appropriate
 # adjacency structures.
 # ========================================================================
 
-library(BayesVarSel)
+library(BVS.DAdj)
+library(Matrix)
 
 ## ---- Setup: simulate logistic regression data ----
 set.seed(42)
@@ -29,7 +30,7 @@ fit1 <- bvs_mh(X, y, adj_type = "fixed", adj_fixed = R_block,
 s1 <- summary(fit1)
 cat("Selected variables:", paste(s1$selected, collapse = ", "), "\n")
 cat("PIPs (first 15):", round(s1$pip[1:15], 2), "\n")
-plot(fit1, main = "MH + Fixed Adj")
+plot(fit1)
 
 
 ## ---- Example 2: PG with single fixed adjacency ----
@@ -47,6 +48,13 @@ if (requireNamespace("huge", quietly = TRUE)) {
                   niter = 2000, burnin = 500)
   s3 <- summary(fit3)
   cat("Selected variables:", paste(s3$selected, collapse = ", "), "\n")
+
+  cat("\n=== Example 3b: bvs_mh, glasso + fixed (EBIC) ===\n")
+  fit3b <- bvs_mh(X, y, adj_type = "glasso_fixed",
+                  adj_fixed = R_block, glasso_criterion = "ebic",
+                  niter = 2000, burnin = 500)
+  s3b <- summary(fit3b)
+  cat("Selected variables:", paste(s3b$selected, collapse = ", "), "\n")
 } else {
   cat("Skipping: 'huge' package not installed.\n")
 }
@@ -54,8 +62,12 @@ if (requireNamespace("huge", quietly = TRUE)) {
 
 ## ---- Example 4: MH with sparse Bayesian GGM adjacency ----
 cat("\n=== Example 4: bvs_mh, sparse GGM ===\n")
-fit4 <- bvs_mh(X, y, adj_type = "ggm", sparse = TRUE,
-                niter = 2000, burnin = 500)
+X_sp <- as(X, "dgCMatrix")
+fit4 <- bvs_mh(
+  X_sp, y, adj_type = "ggm", sparse = TRUE, ultra_sparse = TRUE,
+  niter = 2000, burnin = 500,
+  store_beta = TRUE, store_gamma = TRUE, store_Z_list = FALSE, store_Z_pip = TRUE
+)
 s4 <- summary(fit4)
 cat("Selected variables:", paste(s4$selected, collapse = ", "), "\n")
 
@@ -63,8 +75,11 @@ cat("Selected variables:", paste(s4$selected, collapse = ", "), "\n")
 ## ---- Example 5: PG with dual adjacency (GGM + fixed) ----
 cat("\n=== Example 5: bvs_pg, GGM + fixed, sparse ===\n")
 fit5 <- bvs_pg(X, y, adj_type = "ggm_fixed",
-                adj_fixed = R_block, sparse = TRUE,
-                niter = 2000, burnin = 500)
+                adj_fixed = as(as(as(R_block, "CsparseMatrix"), "generalMatrix"), "dgCMatrix"),
+                sparse = TRUE, ultra_sparse = TRUE,
+                niter = 2000, burnin = 500,
+                store_beta = TRUE, store_gamma = TRUE,
+                store_Z_list = FALSE, store_Z_pip = TRUE)
 s5 <- summary(fit5)
 cat("Selected variables:", paste(s5$selected, collapse = ", "), "\n")
 

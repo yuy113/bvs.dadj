@@ -9,8 +9,8 @@ BayesLogit_DualNet_GGM <- function(X, y, S_ggm, n_ggm, R_fix_int, niter, burnin,
     .Call(`_BVS_DAdj_BayesLogit_DualNet_GGM`, X, y, S_ggm, n_ggm, R_fix_int, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, lambda_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in)
 }
 
-BayesLogit_DualNet_SparseGGM <- function(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_int, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, T_max, proposal_type, n_mh_gamma = 5L, thin = 1L, beta_in = NULL, gamma_in = NULL, alpha_in = 0.0) {
-    .Call(`_BVS_DAdj_BayesLogit_DualNet_SparseGGM`, X, y, S_i, S_p_csc, S_x, S_diag, R_fix_int, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in)
+BayesLogit_DualNet_SparseGGM <- function(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, T_max, proposal_type, n_mh_gamma = 5L, thin = 1L, beta_in = NULL, gamma_in = NULL, alpha_in = 0.0, store_beta = TRUE, store_gamma = TRUE, store_Z_list = FALSE, store_Z_pip = TRUE) {
+    .Call(`_BVS_DAdj_BayesLogit_DualNet_SparseGGM`, X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip)
 }
 
 phase_transit_2eta_fixadj <- function(R1, R2, T_max, mu, min_eta, max_eta, num_rep, step_size = 0.01) {
@@ -21,8 +21,8 @@ BayesLogit_PG_DualAdj <- function(X, y, R_glasso_int, R_fix_int, niter, burnin, 
     .Call(`_BVS_DAdj_BayesLogit_PG_DualAdj`, X, y, R_glasso_int, R_fix_int, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e, f, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in, eta1_init, eta2_init, sigmasq_init)
 }
 
-BayesLogit_PG_DualNet_SparseGGM <- function(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_int, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e_eta, f_eta, T_max, proposal_type, thin = 1L, beta_in = NULL, gamma_in = NULL, alpha_in = 0.0) {
-    .Call(`_BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM`, X, y, S_i, S_p_csc, S_x, S_diag, R_fix_int, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in)
+BayesLogit_PG_DualNet_SparseGGM <- function(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e_eta, f_eta, T_max, proposal_type, thin = 1L, beta_in = NULL, gamma_in = NULL, alpha_in = 0.0, store_beta = TRUE, store_gamma = TRUE, store_Z_list = FALSE, store_Z_pip = TRUE) {
+    .Call(`_BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM`, X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip)
 }
 
 phase_transit_2eta <- function(R1, R2, T_max, mu, min_eta, max_eta, num_rep, step_size = 0.01) {
@@ -41,16 +41,12 @@ phase_transit_1eta <- function(R1, T_max, mu, min_eta, max_eta, num_rep, step_si
     .Call(`_BVS_DAdj_phase_transit_1eta`, R1, T_max, mu, min_eta, max_eta, num_rep, step_size)
 }
 
-BayesLogit_PG_SingleAdj_GGM_Moller <- function(X, y, S_ggm, n_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, lambda_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_init, gamma_init, alpha_in) {
-    .Call(`_BVS_DAdj_BayesLogit_PG_SingleAdj_GGM_Moller`, X, y, S_ggm, n_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, lambda_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_init, gamma_init, alpha_in)
+BayesLogit_PG_SingleAdj_GGM_Moller <- function(X, y, S_ggm, n_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, lambda_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin = 1L, beta_in = NULL, gamma_in = NULL, alpha_in = 0.0) {
+    .Call(`_BVS_DAdj_BayesLogit_PG_SingleAdj_GGM_Moller`, X, y, S_ggm, n_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, lambda_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in)
 }
 
-phase_transit_1eta_sparse <- function(S_i, S_p_csc, p_ggm, T_max, mu, min_eta, max_eta, num_rep, step_size = 0.01) {
-    .Call(`_BVS_DAdj_phase_transit_1eta_sparse`, S_i, S_p_csc, p_ggm, T_max, mu, min_eta, max_eta, num_rep, step_size)
-}
-
-BayesLogit_PG_SingleAdj_SparseGGM <- function(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin = 1L, beta_in = NULL, gamma_in = NULL, alpha_in = 0.0) {
-    .Call(`_BVS_DAdj_BayesLogit_PG_SingleAdj_SparseGGM`, X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in)
+BayesLogit_PG_SingleAdj_SparseGGM <- function(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin = 1L, beta_in = NULL, gamma_in = NULL, alpha_in = 0.0, store_beta = TRUE, store_gamma = TRUE, store_Z_list = FALSE, store_Z_pip = TRUE) {
+    .Call(`_BVS_DAdj_BayesLogit_PG_SingleAdj_SparseGGM`, X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip)
 }
 
 BayesLogit_SingleNet_FixedAdj <- function(X, y, R_fix_int, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, eta_sd, mu_tilde, eta1_tilde, T_max, proposal_type, thin = 1L, beta_in = NULL, gamma_in = NULL, alpha_in = 0.0) {
@@ -61,7 +57,23 @@ BayesLogit_SingleNet_GGM <- function(X, y, S_ggm, n_ggm, niter, burnin, mu, nu0,
     .Call(`_BVS_DAdj_BayesLogit_SingleNet_GGM`, X, y, S_ggm, n_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, lambda_ggm, eta1_sd, mu_tilde, eta1_tilde, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in)
 }
 
-BayesLogit_SingleNet_SparseGGM <- function(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, T_max, proposal_type, n_mh_gamma = 5L, thin = 1L, beta_in = NULL, gamma_in = NULL, alpha_in = 0.0) {
-    .Call(`_BVS_DAdj_BayesLogit_SingleNet_SparseGGM`, X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in)
+BayesLogit_SingleNet_SparseGGM <- function(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, T_max, proposal_type, n_mh_gamma = 5L, thin = 1L, beta_in = NULL, gamma_in = NULL, alpha_in = 0.0, store_beta = TRUE, store_gamma = TRUE, store_Z_list = FALSE, store_Z_pip = TRUE) {
+    .Call(`_BVS_DAdj_BayesLogit_SingleNet_SparseGGM`, X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip)
+}
+
+BayesLogit_SingleNet_SparseGGM_UltraSparse <- function(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, T_max, proposal_type, n_mh_gamma = 5L, thin = 1L, beta_in = NULL, gamma_in = NULL, alpha_in = 0.0, store_beta = TRUE, store_gamma = TRUE, store_Z_list = FALSE, store_Z_pip = TRUE) {
+    .Call(`_BVS_DAdj_BayesLogit_SingleNet_SparseGGM_UltraSparse`, X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip)
+}
+
+BayesLogit_DualNet_SparseGGM_UltraSparse <- function(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, T_max, proposal_type, n_mh_gamma = 5L, thin = 1L, beta_in = NULL, gamma_in = NULL, alpha_in = 0.0, store_beta = TRUE, store_gamma = TRUE, store_Z_list = FALSE, store_Z_pip = TRUE) {
+    .Call(`_BVS_DAdj_BayesLogit_DualNet_SparseGGM_UltraSparse`, X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip)
+}
+
+BayesLogit_PG_SingleNet_SparseGGM_UltraSparse <- function(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin = 1L, beta_in = NULL, gamma_in = NULL, alpha_in = 0.0, store_beta = TRUE, store_gamma = TRUE, store_Z_list = FALSE, store_Z_pip = TRUE) {
+    .Call(`_BVS_DAdj_BayesLogit_PG_SingleNet_SparseGGM_UltraSparse`, X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip)
+}
+
+BayesLogit_PG_DualNet_SparseGGM_UltraSparse <- function(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e_eta, f_eta, T_max, proposal_type, thin = 1L, beta_in = NULL, gamma_in = NULL, alpha_in = 0.0, store_beta = TRUE, store_gamma = TRUE, store_Z_list = FALSE, store_Z_pip = TRUE) {
+    .Call(`_BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM_UltraSparse`, X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip)
 }
 

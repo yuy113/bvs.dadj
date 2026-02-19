@@ -28,25 +28,105 @@
 #'
 #' @method summary bvs
 #' @export
-summary.bvs <- function(object, pip_threshold = 0.5, ...) {
+.extract_pip_from_bvs <- function(object) {
+  if (!is.null(object$gamma_pip)) {
+    return(as.numeric(object$gamma_pip))
+  }
 
   gamma <- object$gamma
-  beta  <- object$beta
+  if (is.matrix(gamma)) {
+    return(colMeans(gamma))
+  }
 
-  pip <- colMeans(gamma)
+  if (is.list(gamma)) {
+    p <- object$p
+    if (is.null(p) || p < 1L) {
+      stop("Cannot infer p for sparse gamma samples.")
+    }
+    n_save <- length(gamma)
+    if (n_save < 1L) {
+      return(rep(0, p))
+    }
+    pip_counts <- numeric(p)
+    for (s in seq_len(n_save)) {
+      idx <- gamma[[s]]
+      if (length(idx) > 0L) {
+        idx1 <- as.integer(idx) + 1L
+        idx1 <- idx1[idx1 >= 1L & idx1 <= p]
+        if (length(idx1) > 0L) {
+          pip_counts[idx1] <- pip_counts[idx1] + 1
+        }
+      }
+    }
+    return(pip_counts / n_save)
+  }
+
+  stop("Posterior inclusion probabilities are unavailable.")
+}
+
+.extract_beta_summary_from_bvs <- function(object) {
+  beta <- object$beta
+  p <- object$p
+
+  if (is.matrix(beta)) {
+    return(list(
+      beta_mean = colMeans(beta),
+      beta_lower = apply(beta, 2, quantile, probs = 0.025),
+      beta_upper = apply(beta, 2, quantile, probs = 0.975)
+    ))
+  }
+
+  if (is.list(beta)) {
+    n_save <- length(beta)
+    if (is.null(p) || p < 1L || n_save < 1L) {
+      return(list(beta_mean = NULL, beta_lower = NULL, beta_upper = NULL))
+    }
+
+    # Guard against accidental large dense materialization.
+    if ((as.double(p) * as.double(n_save)) > 2e7) {
+      return(list(beta_mean = NULL, beta_lower = NULL, beta_upper = NULL))
+    }
+
+    beta_mat <- matrix(0, nrow = n_save, ncol = p)
+    for (s in seq_len(n_save)) {
+      bm <- beta[[s]]
+      if (is.null(bm) || length(bm) == 0L) {
+        next
+      }
+      bm <- as.matrix(bm)
+      if (nrow(bm) > 0L && ncol(bm) >= 2L) {
+        idx <- as.integer(bm[, 1]) + 1L
+        val <- as.numeric(bm[, 2])
+        keep <- idx >= 1L & idx <= p & is.finite(val)
+        if (any(keep)) {
+          beta_mat[s, idx[keep]] <- val[keep]
+        }
+      }
+    }
+    return(list(
+      beta_mean = colMeans(beta_mat),
+      beta_lower = apply(beta_mat, 2, quantile, probs = 0.025),
+      beta_upper = apply(beta_mat, 2, quantile, probs = 0.975)
+    ))
+  }
+
+  list(beta_mean = NULL, beta_lower = NULL, beta_upper = NULL)
+}
+
+summary.bvs <- function(object, pip_threshold = 0.5, ...) {
+
+  pip <- .extract_pip_from_bvs(object)
   selected <- which(pip > pip_threshold)
 
-  beta_mean  <- colMeans(beta)
-  beta_lower <- apply(beta, 2, quantile, probs = 0.025)
-  beta_upper <- apply(beta, 2, quantile, probs = 0.975)
-  alpha_mean <- if (!is.null(object$alpha)) mean(object$alpha) else NA
+  beta_sum <- .extract_beta_summary_from_bvs(object)
+  alpha_mean <- if (!is.null(object$alpha)) mean(object$alpha) else NA_real_
 
   out <- list(
     pip        = pip,
     selected   = selected,
-    beta_mean  = beta_mean,
-    beta_lower = beta_lower,
-    beta_upper = beta_upper,
+    beta_mean  = beta_sum$beta_mean,
+    beta_lower = beta_sum$beta_lower,
+    beta_upper = beta_sum$beta_upper,
     alpha_mean = alpha_mean,
     nselected  = length(selected),
     sampler    = object$sampler,
@@ -110,7 +190,7 @@ print.bvs <- function(x, ...) {
 #' @export
 plot.bvs <- function(x, pip_threshold = 0.5, top_n = NULL, ...) {
 
-  pip <- colMeans(x$gamma)
+  pip <- .extract_pip_from_bvs(x)
 
   if (!is.null(top_n)) {
     ord <- order(pip, decreasing = TRUE)[1:min(top_n, length(pip))]

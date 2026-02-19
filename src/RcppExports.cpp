@@ -88,18 +88,19 @@ BEGIN_RCPP
 END_RCPP
 }
 // BayesLogit_DualNet_SparseGGM
-Rcpp::List BayesLogit_DualNet_SparseGGM(const arma::mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, const Rcpp::IntegerMatrix& R_fix_int, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e, double f, double v0_ggm, double v1_ggm, double pii_ggm, double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde, double eta2_tilde, unsigned int T_max, int proposal_type, int n_mh_gamma, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in);
-RcppExport SEXP _BVS_DAdj_BayesLogit_DualNet_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP R_fix_intSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP eSEXP, SEXP fSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta1_sdSEXP, SEXP eta2_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP eta2_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP n_mh_gammaSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP) {
+Rcpp::List BayesLogit_DualNet_SparseGGM(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, const Rcpp::IntegerVector& R_fix_i, const Rcpp::IntegerVector& R_fix_p_csc, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e, double f, double v0_ggm, double v1_ggm, double pii_ggm, double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde, double eta2_tilde, unsigned int T_max, int proposal_type, int n_mh_gamma, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip);
+RcppExport SEXP _BVS_DAdj_BayesLogit_DualNet_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP R_fix_iSEXP, SEXP R_fix_p_cscSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP eSEXP, SEXP fSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta1_sdSEXP, SEXP eta2_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP eta2_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP n_mh_gammaSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< const arma::mat& >::type X(XSEXP);
+    Rcpp::traits::input_parameter< const arma::sp_mat& >::type X(XSEXP);
     Rcpp::traits::input_parameter< const arma::vec& >::type y(ySEXP);
     Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_i(S_iSEXP);
     Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_p_csc(S_p_cscSEXP);
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type S_x(S_xSEXP);
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type S_diag(S_diagSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::IntegerMatrix& >::type R_fix_int(R_fix_intSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type R_fix_i(R_fix_iSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type R_fix_p_csc(R_fix_p_cscSEXP);
     Rcpp::traits::input_parameter< int >::type p_ggm(p_ggmSEXP);
     Rcpp::traits::input_parameter< int >::type niter(niterSEXP);
     Rcpp::traits::input_parameter< int >::type burnin(burninSEXP);
@@ -126,7 +127,11 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type beta_in(beta_inSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::IntegerVector> >::type gamma_in(gamma_inSEXP);
     Rcpp::traits::input_parameter< double >::type alpha_in(alpha_inSEXP);
-    rcpp_result_gen = Rcpp::wrap(BayesLogit_DualNet_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_int, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in));
+    Rcpp::traits::input_parameter< bool >::type store_beta(store_betaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_gamma(store_gammaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_list(store_Z_listSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_pip(store_Z_pipSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_DualNet_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -188,18 +193,19 @@ BEGIN_RCPP
 END_RCPP
 }
 // BayesLogit_PG_DualNet_SparseGGM
-Rcpp::List BayesLogit_PG_DualNet_SparseGGM(const arma::mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, const Rcpp::IntegerMatrix& R_fix_int, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm, double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde, double eta2_tilde, double e_eta, double f_eta, unsigned int T_max, int proposal_type, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in);
-RcppExport SEXP _BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP R_fix_intSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP n_mh_gammaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta1_sdSEXP, SEXP eta2_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP eta2_tildeSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP) {
+Rcpp::List BayesLogit_PG_DualNet_SparseGGM(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, const Rcpp::IntegerVector& R_fix_i, const Rcpp::IntegerVector& R_fix_p_csc, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm, double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde, double eta2_tilde, double e_eta, double f_eta, unsigned int T_max, int proposal_type, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip);
+RcppExport SEXP _BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP R_fix_iSEXP, SEXP R_fix_p_cscSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP n_mh_gammaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta1_sdSEXP, SEXP eta2_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP eta2_tildeSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< const arma::mat& >::type X(XSEXP);
+    Rcpp::traits::input_parameter< const arma::sp_mat& >::type X(XSEXP);
     Rcpp::traits::input_parameter< const arma::vec& >::type y(ySEXP);
     Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_i(S_iSEXP);
     Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_p_csc(S_p_cscSEXP);
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type S_x(S_xSEXP);
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type S_diag(S_diagSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::IntegerMatrix& >::type R_fix_int(R_fix_intSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type R_fix_i(R_fix_iSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type R_fix_p_csc(R_fix_p_cscSEXP);
     Rcpp::traits::input_parameter< int >::type p_ggm(p_ggmSEXP);
     Rcpp::traits::input_parameter< int >::type niter(niterSEXP);
     Rcpp::traits::input_parameter< int >::type burnin(burninSEXP);
@@ -226,7 +232,11 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type beta_in(beta_inSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::IntegerVector> >::type gamma_in(gamma_inSEXP);
     Rcpp::traits::input_parameter< double >::type alpha_in(alpha_inSEXP);
-    rcpp_result_gen = Rcpp::wrap(BayesLogit_PG_DualNet_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_int, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in));
+    Rcpp::traits::input_parameter< bool >::type store_beta(store_betaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_gamma(store_gammaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_list(store_Z_listSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_pip(store_Z_pipSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_PG_DualNet_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -342,8 +352,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // BayesLogit_PG_SingleAdj_GGM_Moller
-Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(const arma::mat& X, const arma::vec& y, const arma::mat& S_ggm, double n_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm, double lambda_ggm, double eta_sd, double mu_tilde, double eta1_tilde, double e_eta, double f_eta, unsigned int T_max, int proposal_type, int thin, arma::vec beta_init, arma::uvec gamma_init, double alpha_in);
-RcppExport SEXP _BVS_DAdj_BayesLogit_PG_SingleAdj_GGM_Moller(SEXP XSEXP, SEXP ySEXP, SEXP S_ggmSEXP, SEXP n_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP n_mh_gammaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP lambda_ggmSEXP, SEXP eta_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP beta_initSEXP, SEXP gamma_initSEXP, SEXP alpha_inSEXP) {
+Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(const arma::mat& X, const arma::vec& y, const arma::mat& S_ggm, double n_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm, double lambda_ggm, double eta_sd, double mu_tilde, double eta1_tilde, double e_eta, double f_eta, unsigned int T_max, int proposal_type, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in);
+RcppExport SEXP _BVS_DAdj_BayesLogit_PG_SingleAdj_GGM_Moller(SEXP XSEXP, SEXP ySEXP, SEXP S_ggmSEXP, SEXP n_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP n_mh_gammaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP lambda_ggmSEXP, SEXP eta_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -372,39 +382,20 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< unsigned int >::type T_max(T_maxSEXP);
     Rcpp::traits::input_parameter< int >::type proposal_type(proposal_typeSEXP);
     Rcpp::traits::input_parameter< int >::type thin(thinSEXP);
-    Rcpp::traits::input_parameter< arma::vec >::type beta_init(beta_initSEXP);
-    Rcpp::traits::input_parameter< arma::uvec >::type gamma_init(gamma_initSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type beta_in(beta_inSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::IntegerVector> >::type gamma_in(gamma_inSEXP);
     Rcpp::traits::input_parameter< double >::type alpha_in(alpha_inSEXP);
-    rcpp_result_gen = Rcpp::wrap(BayesLogit_PG_SingleAdj_GGM_Moller(X, y, S_ggm, n_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, lambda_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_init, gamma_init, alpha_in));
-    return rcpp_result_gen;
-END_RCPP
-}
-// phase_transit_1eta_sparse
-Rcpp::IntegerMatrix phase_transit_1eta_sparse(const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, int p_ggm, int T_max, double mu, double min_eta, double max_eta, unsigned int num_rep, double step_size);
-RcppExport SEXP _BVS_DAdj_phase_transit_1eta_sparse(SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP p_ggmSEXP, SEXP T_maxSEXP, SEXP muSEXP, SEXP min_etaSEXP, SEXP max_etaSEXP, SEXP num_repSEXP, SEXP step_sizeSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_i(S_iSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_p_csc(S_p_cscSEXP);
-    Rcpp::traits::input_parameter< int >::type p_ggm(p_ggmSEXP);
-    Rcpp::traits::input_parameter< int >::type T_max(T_maxSEXP);
-    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
-    Rcpp::traits::input_parameter< double >::type min_eta(min_etaSEXP);
-    Rcpp::traits::input_parameter< double >::type max_eta(max_etaSEXP);
-    Rcpp::traits::input_parameter< unsigned int >::type num_rep(num_repSEXP);
-    Rcpp::traits::input_parameter< double >::type step_size(step_sizeSEXP);
-    rcpp_result_gen = Rcpp::wrap(phase_transit_1eta_sparse(S_i, S_p_csc, p_ggm, T_max, mu, min_eta, max_eta, num_rep, step_size));
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_PG_SingleAdj_GGM_Moller(X, y, S_ggm, n_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, lambda_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in));
     return rcpp_result_gen;
 END_RCPP
 }
 // BayesLogit_PG_SingleAdj_SparseGGM
-Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(const arma::mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm, double eta_sd, double mu_tilde, double eta1_tilde, double e_eta, double f_eta, unsigned int T_max, int proposal_type, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in);
-RcppExport SEXP _BVS_DAdj_BayesLogit_PG_SingleAdj_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP n_mh_gammaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP) {
+Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm, double eta_sd, double mu_tilde, double eta1_tilde, double e_eta, double f_eta, unsigned int T_max, int proposal_type, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip);
+RcppExport SEXP _BVS_DAdj_BayesLogit_PG_SingleAdj_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP n_mh_gammaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< const arma::mat& >::type X(XSEXP);
+    Rcpp::traits::input_parameter< const arma::sp_mat& >::type X(XSEXP);
     Rcpp::traits::input_parameter< const arma::vec& >::type y(ySEXP);
     Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_i(S_iSEXP);
     Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_p_csc(S_p_cscSEXP);
@@ -434,7 +425,11 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type beta_in(beta_inSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::IntegerVector> >::type gamma_in(gamma_inSEXP);
     Rcpp::traits::input_parameter< double >::type alpha_in(alpha_inSEXP);
-    rcpp_result_gen = Rcpp::wrap(BayesLogit_PG_SingleAdj_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in));
+    Rcpp::traits::input_parameter< bool >::type store_beta(store_betaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_gamma(store_gammaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_list(store_Z_listSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_pip(store_Z_pipSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_PG_SingleAdj_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -508,12 +503,12 @@ BEGIN_RCPP
 END_RCPP
 }
 // BayesLogit_SingleNet_SparseGGM
-Rcpp::List BayesLogit_SingleNet_SparseGGM(const arma::mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e, double f, double v0_ggm, double v1_ggm, double pii_ggm, double eta_sd, double mu_tilde, double eta1_tilde, unsigned int T_max, int proposal_type, int n_mh_gamma, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in);
-RcppExport SEXP _BVS_DAdj_BayesLogit_SingleNet_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP eSEXP, SEXP fSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP n_mh_gammaSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP) {
+Rcpp::List BayesLogit_SingleNet_SparseGGM(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e, double f, double v0_ggm, double v1_ggm, double pii_ggm, double eta_sd, double mu_tilde, double eta1_tilde, unsigned int T_max, int proposal_type, int n_mh_gamma, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip);
+RcppExport SEXP _BVS_DAdj_BayesLogit_SingleNet_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP eSEXP, SEXP fSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP n_mh_gammaSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< const arma::mat& >::type X(XSEXP);
+    Rcpp::traits::input_parameter< const arma::sp_mat& >::type X(XSEXP);
     Rcpp::traits::input_parameter< const arma::vec& >::type y(ySEXP);
     Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_i(S_iSEXP);
     Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_p_csc(S_p_cscSEXP);
@@ -543,7 +538,195 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type beta_in(beta_inSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::IntegerVector> >::type gamma_in(gamma_inSEXP);
     Rcpp::traits::input_parameter< double >::type alpha_in(alpha_inSEXP);
-    rcpp_result_gen = Rcpp::wrap(BayesLogit_SingleNet_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in));
+    Rcpp::traits::input_parameter< bool >::type store_beta(store_betaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_gamma(store_gammaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_list(store_Z_listSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_pip(store_Z_pipSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_SingleNet_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip));
+    return rcpp_result_gen;
+END_RCPP
+}
+// BayesLogit_SingleNet_SparseGGM_UltraSparse
+Rcpp::List BayesLogit_SingleNet_SparseGGM_UltraSparse(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e, double f, double v0_ggm, double v1_ggm, double pii_ggm, double eta_sd, double mu_tilde, double eta1_tilde, unsigned int T_max, int proposal_type, int n_mh_gamma, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip);
+RcppExport SEXP _BVS_DAdj_BayesLogit_SingleNet_SparseGGM_UltraSparse(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP eSEXP, SEXP fSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP n_mh_gammaSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::sp_mat& >::type X(XSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type y(ySEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_i(S_iSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_p_csc(S_p_cscSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type S_x(S_xSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type S_diag(S_diagSEXP);
+    Rcpp::traits::input_parameter< int >::type p_ggm(p_ggmSEXP);
+    Rcpp::traits::input_parameter< int >::type niter(niterSEXP);
+    Rcpp::traits::input_parameter< int >::type burnin(burninSEXP);
+    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< double >::type nu0(nu0SEXP);
+    Rcpp::traits::input_parameter< double >::type sigmasq0(sigmasq0SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha0(alpha0SEXP);
+    Rcpp::traits::input_parameter< double >::type beta0(beta0SEXP);
+    Rcpp::traits::input_parameter< double >::type h(hSEXP);
+    Rcpp::traits::input_parameter< double >::type e(eSEXP);
+    Rcpp::traits::input_parameter< double >::type f(fSEXP);
+    Rcpp::traits::input_parameter< double >::type v0_ggm(v0_ggmSEXP);
+    Rcpp::traits::input_parameter< double >::type v1_ggm(v1_ggmSEXP);
+    Rcpp::traits::input_parameter< double >::type pii_ggm(pii_ggmSEXP);
+    Rcpp::traits::input_parameter< double >::type eta_sd(eta_sdSEXP);
+    Rcpp::traits::input_parameter< double >::type mu_tilde(mu_tildeSEXP);
+    Rcpp::traits::input_parameter< double >::type eta1_tilde(eta1_tildeSEXP);
+    Rcpp::traits::input_parameter< unsigned int >::type T_max(T_maxSEXP);
+    Rcpp::traits::input_parameter< int >::type proposal_type(proposal_typeSEXP);
+    Rcpp::traits::input_parameter< int >::type n_mh_gamma(n_mh_gammaSEXP);
+    Rcpp::traits::input_parameter< int >::type thin(thinSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type beta_in(beta_inSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::IntegerVector> >::type gamma_in(gamma_inSEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_in(alpha_inSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_beta(store_betaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_gamma(store_gammaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_list(store_Z_listSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_pip(store_Z_pipSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_SingleNet_SparseGGM_UltraSparse(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip));
+    return rcpp_result_gen;
+END_RCPP
+}
+// BayesLogit_DualNet_SparseGGM_UltraSparse
+Rcpp::List BayesLogit_DualNet_SparseGGM_UltraSparse(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, const Rcpp::IntegerVector& R_fix_i, const Rcpp::IntegerVector& R_fix_p_csc, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e, double f, double v0_ggm, double v1_ggm, double pii_ggm, double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde, double eta2_tilde, unsigned int T_max, int proposal_type, int n_mh_gamma, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip);
+RcppExport SEXP _BVS_DAdj_BayesLogit_DualNet_SparseGGM_UltraSparse(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP R_fix_iSEXP, SEXP R_fix_p_cscSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP eSEXP, SEXP fSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta1_sdSEXP, SEXP eta2_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP eta2_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP n_mh_gammaSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::sp_mat& >::type X(XSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type y(ySEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_i(S_iSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_p_csc(S_p_cscSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type S_x(S_xSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type S_diag(S_diagSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type R_fix_i(R_fix_iSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type R_fix_p_csc(R_fix_p_cscSEXP);
+    Rcpp::traits::input_parameter< int >::type p_ggm(p_ggmSEXP);
+    Rcpp::traits::input_parameter< int >::type niter(niterSEXP);
+    Rcpp::traits::input_parameter< int >::type burnin(burninSEXP);
+    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< double >::type nu0(nu0SEXP);
+    Rcpp::traits::input_parameter< double >::type sigmasq0(sigmasq0SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha0(alpha0SEXP);
+    Rcpp::traits::input_parameter< double >::type beta0(beta0SEXP);
+    Rcpp::traits::input_parameter< double >::type h(hSEXP);
+    Rcpp::traits::input_parameter< double >::type e(eSEXP);
+    Rcpp::traits::input_parameter< double >::type f(fSEXP);
+    Rcpp::traits::input_parameter< double >::type v0_ggm(v0_ggmSEXP);
+    Rcpp::traits::input_parameter< double >::type v1_ggm(v1_ggmSEXP);
+    Rcpp::traits::input_parameter< double >::type pii_ggm(pii_ggmSEXP);
+    Rcpp::traits::input_parameter< double >::type eta1_sd(eta1_sdSEXP);
+    Rcpp::traits::input_parameter< double >::type eta2_sd(eta2_sdSEXP);
+    Rcpp::traits::input_parameter< double >::type mu_tilde(mu_tildeSEXP);
+    Rcpp::traits::input_parameter< double >::type eta1_tilde(eta1_tildeSEXP);
+    Rcpp::traits::input_parameter< double >::type eta2_tilde(eta2_tildeSEXP);
+    Rcpp::traits::input_parameter< unsigned int >::type T_max(T_maxSEXP);
+    Rcpp::traits::input_parameter< int >::type proposal_type(proposal_typeSEXP);
+    Rcpp::traits::input_parameter< int >::type n_mh_gamma(n_mh_gammaSEXP);
+    Rcpp::traits::input_parameter< int >::type thin(thinSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type beta_in(beta_inSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::IntegerVector> >::type gamma_in(gamma_inSEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_in(alpha_inSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_beta(store_betaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_gamma(store_gammaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_list(store_Z_listSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_pip(store_Z_pipSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_DualNet_SparseGGM_UltraSparse(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e, f, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip));
+    return rcpp_result_gen;
+END_RCPP
+}
+// BayesLogit_PG_SingleNet_SparseGGM_UltraSparse
+Rcpp::List BayesLogit_PG_SingleNet_SparseGGM_UltraSparse(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm, double eta_sd, double mu_tilde, double eta1_tilde, double e_eta, double f_eta, unsigned int T_max, int proposal_type, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip);
+RcppExport SEXP _BVS_DAdj_BayesLogit_PG_SingleNet_SparseGGM_UltraSparse(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP n_mh_gammaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::sp_mat& >::type X(XSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type y(ySEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_i(S_iSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_p_csc(S_p_cscSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type S_x(S_xSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type S_diag(S_diagSEXP);
+    Rcpp::traits::input_parameter< int >::type p_ggm(p_ggmSEXP);
+    Rcpp::traits::input_parameter< int >::type niter(niterSEXP);
+    Rcpp::traits::input_parameter< int >::type burnin(burninSEXP);
+    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< double >::type nu0(nu0SEXP);
+    Rcpp::traits::input_parameter< double >::type sigmasq0(sigmasq0SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha0(alpha0SEXP);
+    Rcpp::traits::input_parameter< double >::type beta0(beta0SEXP);
+    Rcpp::traits::input_parameter< double >::type h(hSEXP);
+    Rcpp::traits::input_parameter< int >::type n_mh_gamma(n_mh_gammaSEXP);
+    Rcpp::traits::input_parameter< double >::type v0_ggm(v0_ggmSEXP);
+    Rcpp::traits::input_parameter< double >::type v1_ggm(v1_ggmSEXP);
+    Rcpp::traits::input_parameter< double >::type pii_ggm(pii_ggmSEXP);
+    Rcpp::traits::input_parameter< double >::type eta_sd(eta_sdSEXP);
+    Rcpp::traits::input_parameter< double >::type mu_tilde(mu_tildeSEXP);
+    Rcpp::traits::input_parameter< double >::type eta1_tilde(eta1_tildeSEXP);
+    Rcpp::traits::input_parameter< double >::type e_eta(e_etaSEXP);
+    Rcpp::traits::input_parameter< double >::type f_eta(f_etaSEXP);
+    Rcpp::traits::input_parameter< unsigned int >::type T_max(T_maxSEXP);
+    Rcpp::traits::input_parameter< int >::type proposal_type(proposal_typeSEXP);
+    Rcpp::traits::input_parameter< int >::type thin(thinSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type beta_in(beta_inSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::IntegerVector> >::type gamma_in(gamma_inSEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_in(alpha_inSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_beta(store_betaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_gamma(store_gammaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_list(store_Z_listSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_pip(store_Z_pipSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_PG_SingleNet_SparseGGM_UltraSparse(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip));
+    return rcpp_result_gen;
+END_RCPP
+}
+// BayesLogit_PG_DualNet_SparseGGM_UltraSparse
+Rcpp::List BayesLogit_PG_DualNet_SparseGGM_UltraSparse(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, const Rcpp::IntegerVector& R_fix_i, const Rcpp::IntegerVector& R_fix_p_csc, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm, double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde, double eta2_tilde, double e_eta, double f_eta, unsigned int T_max, int proposal_type, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip);
+RcppExport SEXP _BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM_UltraSparse(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP R_fix_iSEXP, SEXP R_fix_p_cscSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP n_mh_gammaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta1_sdSEXP, SEXP eta2_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP eta2_tildeSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::sp_mat& >::type X(XSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type y(ySEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_i(S_iSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type S_p_csc(S_p_cscSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type S_x(S_xSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type S_diag(S_diagSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type R_fix_i(R_fix_iSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type R_fix_p_csc(R_fix_p_cscSEXP);
+    Rcpp::traits::input_parameter< int >::type p_ggm(p_ggmSEXP);
+    Rcpp::traits::input_parameter< int >::type niter(niterSEXP);
+    Rcpp::traits::input_parameter< int >::type burnin(burninSEXP);
+    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< double >::type nu0(nu0SEXP);
+    Rcpp::traits::input_parameter< double >::type sigmasq0(sigmasq0SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha0(alpha0SEXP);
+    Rcpp::traits::input_parameter< double >::type beta0(beta0SEXP);
+    Rcpp::traits::input_parameter< double >::type h(hSEXP);
+    Rcpp::traits::input_parameter< int >::type n_mh_gamma(n_mh_gammaSEXP);
+    Rcpp::traits::input_parameter< double >::type v0_ggm(v0_ggmSEXP);
+    Rcpp::traits::input_parameter< double >::type v1_ggm(v1_ggmSEXP);
+    Rcpp::traits::input_parameter< double >::type pii_ggm(pii_ggmSEXP);
+    Rcpp::traits::input_parameter< double >::type eta1_sd(eta1_sdSEXP);
+    Rcpp::traits::input_parameter< double >::type eta2_sd(eta2_sdSEXP);
+    Rcpp::traits::input_parameter< double >::type mu_tilde(mu_tildeSEXP);
+    Rcpp::traits::input_parameter< double >::type eta1_tilde(eta1_tildeSEXP);
+    Rcpp::traits::input_parameter< double >::type eta2_tilde(eta2_tildeSEXP);
+    Rcpp::traits::input_parameter< double >::type e_eta(e_etaSEXP);
+    Rcpp::traits::input_parameter< double >::type f_eta(f_etaSEXP);
+    Rcpp::traits::input_parameter< unsigned int >::type T_max(T_maxSEXP);
+    Rcpp::traits::input_parameter< int >::type proposal_type(proposal_typeSEXP);
+    Rcpp::traits::input_parameter< int >::type thin(thinSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type beta_in(beta_inSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::IntegerVector> >::type gamma_in(gamma_inSEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_in(alpha_inSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_beta(store_betaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_gamma(store_gammaSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_list(store_Z_listSEXP);
+    Rcpp::traits::input_parameter< bool >::type store_Z_pip(store_Z_pipSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_PG_DualNet_SparseGGM_UltraSparse(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in, store_beta, store_gamma, store_Z_list, store_Z_pip));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -551,20 +734,23 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_BVS_DAdj_BayesLogit_DualNet_FixedAdj", (DL_FUNC) &_BVS_DAdj_BayesLogit_DualNet_FixedAdj, 25},
     {"_BVS_DAdj_BayesLogit_DualNet_GGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_DualNet_GGM, 31},
-    {"_BVS_DAdj_BayesLogit_DualNet_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_DualNet_SparseGGM, 33},
+    {"_BVS_DAdj_BayesLogit_DualNet_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_DualNet_SparseGGM, 38},
     {"_BVS_DAdj_phase_transit_2eta_fixadj", (DL_FUNC) &_BVS_DAdj_phase_transit_2eta_fixadj, 8},
     {"_BVS_DAdj_BayesLogit_PG_DualAdj", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_DualAdj, 29},
-    {"_BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM, 33},
+    {"_BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM, 38},
     {"_BVS_DAdj_phase_transit_2eta", (DL_FUNC) &_BVS_DAdj_phase_transit_2eta, 8},
     {"_BVS_DAdj_BayesLogit_PG_GGM_Moller", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_GGM_Moller, 31},
     {"_BVS_DAdj_BayesLogit_PG_SingleAdj", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_SingleAdj, 25},
     {"_BVS_DAdj_phase_transit_1eta", (DL_FUNC) &_BVS_DAdj_phase_transit_1eta, 7},
     {"_BVS_DAdj_BayesLogit_PG_SingleAdj_GGM_Moller", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_SingleAdj_GGM_Moller, 28},
-    {"_BVS_DAdj_phase_transit_1eta_sparse", (DL_FUNC) &_BVS_DAdj_phase_transit_1eta_sparse, 9},
-    {"_BVS_DAdj_BayesLogit_PG_SingleAdj_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_SingleAdj_SparseGGM, 30},
+    {"_BVS_DAdj_BayesLogit_PG_SingleAdj_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_SingleAdj_SparseGGM, 34},
     {"_BVS_DAdj_BayesLogit_SingleNet_FixedAdj", (DL_FUNC) &_BVS_DAdj_BayesLogit_SingleNet_FixedAdj, 22},
     {"_BVS_DAdj_BayesLogit_SingleNet_GGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_SingleNet_GGM, 27},
-    {"_BVS_DAdj_BayesLogit_SingleNet_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_SingleNet_SparseGGM, 30},
+    {"_BVS_DAdj_BayesLogit_SingleNet_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_SingleNet_SparseGGM, 34},
+    {"_BVS_DAdj_BayesLogit_SingleNet_SparseGGM_UltraSparse", (DL_FUNC) &_BVS_DAdj_BayesLogit_SingleNet_SparseGGM_UltraSparse, 34},
+    {"_BVS_DAdj_BayesLogit_DualNet_SparseGGM_UltraSparse", (DL_FUNC) &_BVS_DAdj_BayesLogit_DualNet_SparseGGM_UltraSparse, 38},
+    {"_BVS_DAdj_BayesLogit_PG_SingleNet_SparseGGM_UltraSparse", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_SingleNet_SparseGGM_UltraSparse, 34},
+    {"_BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM_UltraSparse", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM_UltraSparse, 38},
     {NULL, NULL, 0}
 };
 

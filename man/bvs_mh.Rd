@@ -7,10 +7,16 @@
 bvs_mh(
   X,
   y,
-  adj_type = c("fixed", "dual_fixed", "glasso", "ggm", "ggm_fixed"),
+  adj_type = c("fixed", "dual_fixed", "glasso", "glasso_fixed", "ggm", "ggm_fixed"),
   adj_fixed = NULL,
   adj_fixed2 = NULL,
   sparse = FALSE,
+  ultra_sparse = FALSE,
+  S_ggm = NULL,
+  store_beta = FALSE,
+  store_gamma = FALSE,
+  store_Z_list = FALSE,
+  store_Z_pip = TRUE,
   glasso_criterion = c("ebic", "ric"),
   niter = 60000L,
   burnin = 10000L,
@@ -55,6 +61,9 @@ One of:
     (supplied via \code{adj_fixed} and \code{adj_fixed2}).}
   \item{\code{"glasso"}}{Single adjacency estimated from X via graphical
     lasso (\pkg{huge} package), then used as a fixed matrix.}
+  \item{\code{"glasso_fixed"}}{Two fixed adjacency sources: one estimated
+    from X via graphical lasso (\pkg{huge}) and one external fixed matrix
+    supplied via \code{adj_fixed}.}
   \item{\code{"ggm"}}{Single adjacency learned jointly via Bayesian GGM
     SSVS (Wang et al. 2012) during MCMC.}
   \item{\code{"ggm_fixed"}}{Two sources: one learned from Bayesian GGM
@@ -62,7 +71,8 @@ One of:
 }}
 
 \item{adj_fixed}{A \code{p x p} binary adjacency matrix (for
-\code{"fixed"}, \code{"dual_fixed"}, \code{"ggm_fixed"}).}
+\code{"fixed"}, \code{"dual_fixed"}, \code{"glasso_fixed"},
+\code{"ggm_fixed"}).}
 
 \item{adj_fixed2}{A second \code{p x p} binary adjacency matrix
 (for \code{"dual_fixed"} only).}
@@ -181,6 +191,10 @@ summary(fit)
 # Glasso-estimated adjacency with EBIC
 fit2 <- bvs_mh(X, y, adj_type = "glasso", glasso_criterion = "ebic",
                niter = 5000)
+
+# Dual network: glasso-estimated + external fixed adjacency
+fit2b <- bvs_mh(X, y, adj_type = "glasso_fixed", adj_fixed = R,
+                glasso_criterion = "ebic", niter = 5000)
 
 # Sparse Bayesian GGM adjacency
 fit3 <- bvs_mh(X, y, adj_type = "ggm", sparse = TRUE, niter = 5000)

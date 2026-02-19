@@ -7,10 +7,16 @@
 bvs_pg(
   X,
   y,
-  adj_type = c("fixed", "dual_fixed", "glasso", "ggm", "ggm_fixed"),
+  adj_type = c("fixed", "dual_fixed", "glasso", "glasso_fixed", "ggm", "ggm_fixed"),
   adj_fixed = NULL,
   adj_fixed2 = NULL,
   sparse = FALSE,
+  ultra_sparse = FALSE,
+  S_ggm = NULL,
+  store_beta = FALSE,
+  store_gamma = FALSE,
+  store_Z_list = FALSE,
+  store_Z_pip = TRUE,
   glasso_criterion = c("ebic", "ric"),
   niter = 60000L,
   burnin = 10000L,
@@ -55,6 +61,9 @@ One of:
     (supplied via \code{adj_fixed} and \code{adj_fixed2}).}
   \item{\code{"glasso"}}{Single adjacency estimated from X via graphical
     lasso (\pkg{huge} package), then used as a fixed matrix.}
+  \item{\code{"glasso_fixed"}}{Two fixed adjacency sources: one estimated
+    from X via graphical lasso (\pkg{huge}) and one external fixed matrix
+    supplied via \code{adj_fixed}.}
   \item{\code{"ggm"}}{Single adjacency learned jointly via Bayesian GGM
     SSVS (Wang et al. 2012) during MCMC.}
   \item{\code{"ggm_fixed"}}{Two sources: one learned from Bayesian GGM
@@ -62,7 +71,8 @@ One of:
 }}
 
 \item{adj_fixed}{A \code{p x p} binary adjacency matrix (for
-\code{"fixed"}, \code{"dual_fixed"}, \code{"ggm_fixed"}).}
+\code{"fixed"}, \code{"dual_fixed"}, \code{"glasso_fixed"},
+\code{"ggm_fixed"}).}
 
 \item{adj_fixed2}{A second \code{p x p} binary adjacency matrix
 (for \code{"dual_fixed"} only).}
@@ -70,6 +80,21 @@ One of:
 \item{sparse}{Logical; use the sparse high-dimensional backend
 (default \code{FALSE}).  Applicable for \code{adj_type = "ggm"} or
 \code{"ggm_fixed"}.}
+
+\item{ultra_sparse}{Logical; when \code{TRUE} with \code{sparse = TRUE},
+route to ultra-sparse sparse-matrix backends for high-dimensional runs.}
+
+\item{S_ggm}{Optional sparse GGM scatter matrix. For ultra-sparse mode,
+supply this explicitly for very large \code{p}.}
+
+\item{store_beta}{Logical; in ultra-sparse mode, store beta draws.}
+
+\item{store_gamma}{Logical; in ultra-sparse mode, store gamma draws.}
+
+\item{store_Z_list}{Logical; in ultra-sparse mode, store per-iteration
+graph snapshots.}
+
+\item{store_Z_pip}{Logical; in ultra-sparse mode, accumulate sparse edge PIPs.}
 
 \item{glasso_criterion}{Character; criterion for graphical lasso model
 selection: \code{"ebic"} (default) or \code{"ric"}.}
@@ -174,6 +199,11 @@ y <- rbinom(n, 1, plogis(X \%*\% beta_true))
 fit <- bvs_pg(X, y, adj_type = "glasso", glasso_criterion = "ebic",
               niter = 5000)
 summary(fit)
+
+# PG with dual network: glasso-estimated + external fixed adjacency
+R_fix <- diag(0, p); R_fix[1:5, 1:5] <- 1; diag(R_fix) <- 0
+fit1b <- bvs_pg(X, y, adj_type = "glasso_fixed", adj_fixed = R_fix,
+                glasso_criterion = "ebic", niter = 5000)
 
 # PG with sparse GGM adjacency
 fit2 <- bvs_pg(X, y, adj_type = "ggm", sparse = TRUE, niter = 5000)

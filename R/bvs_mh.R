@@ -17,13 +17,17 @@
 #'       (supplied via \code{adj_fixed} and \code{adj_fixed2}).}
 #'     \item{\code{"glasso"}}{Single adjacency estimated from X via graphical
 #'       lasso (\pkg{huge} package), then used as a fixed matrix.}
+#'     \item{\code{"glasso_fixed"}}{Two fixed adjacency sources: one estimated
+#'       from X via graphical lasso (\pkg{huge}) and one external fixed matrix
+#'       supplied via \code{adj_fixed}.}
 #'     \item{\code{"ggm"}}{Single adjacency learned jointly via Bayesian GGM
 #'       SSVS (Wang et al. 2012) during MCMC.}
 #'     \item{\code{"ggm_fixed"}}{Two sources: one learned from Bayesian GGM
 #'       and one fixed (supplied via \code{adj_fixed}).}
 #'   }
 #' @param adj_fixed   A \code{p x p} binary adjacency matrix (for
-#'   \code{"fixed"}, \code{"dual_fixed"}, \code{"ggm_fixed"}).
+#'   \code{"fixed"}, \code{"dual_fixed"}, \code{"glasso_fixed"},
+#'   \code{"ggm_fixed"}).
 #' @param adj_fixed2  A second \code{p x p} binary adjacency matrix
 #'   (for \code{"dual_fixed"} only).
 #' @param sparse    Logical; use the sparse high-dimensional backend
@@ -110,6 +114,10 @@
 #' fit2 <- bvs_mh(X, y, adj_type = "glasso", glasso_criterion = "ebic",
 #'                niter = 5000)
 #'
+#' # Dual network: glasso-estimated + external fixed adjacency
+#' fit2b <- bvs_mh(X, y, adj_type = "glasso_fixed", adj_fixed = R,
+#'                 glasso_criterion = "ebic", niter = 5000)
+#'
 #' # Sparse Bayesian GGM adjacency
 #' fit3 <- bvs_mh(X, y, adj_type = "ggm", sparse = TRUE, niter = 5000)
 #' }
@@ -120,10 +128,16 @@
 #' @export
 bvs_mh <- function(X, y,
                    adj_type = c("fixed", "dual_fixed", "glasso",
-                                "ggm", "ggm_fixed"),
+                                "glasso_fixed", "ggm", "ggm_fixed"),
                    adj_fixed  = NULL,
                    adj_fixed2 = NULL,
                    sparse = FALSE,
+                   ultra_sparse = FALSE,
+                   S_ggm = NULL,
+                   store_beta = FALSE,
+                   store_gamma = FALSE,
+                   store_Z_list = FALSE,
+                   store_Z_pip = TRUE,
                    glasso_criterion = c("ebic", "ric"),
 
                    # MCMC control
@@ -161,8 +175,18 @@ bvs_mh <- function(X, y,
   adj_type <- match.arg(adj_type)
   glasso_criterion <- match.arg(glasso_criterion)
 
+  if (isTRUE(sparse) && !adj_type %in% c("ggm", "ggm_fixed")) {
+    warning("sparse=TRUE is only implemented for adj_type='ggm' or 'ggm_fixed'; using dense backend.",
+            call. = FALSE)
+  }
+
   # Dimensions
-  X <- as.matrix(X)
+  use_sparse_backend <- isTRUE(sparse) && adj_type %in% c("ggm", "ggm_fixed")
+  if (use_sparse_backend) {
+    X <- .as_dgC(X)
+  } else {
+    X <- as.matrix(X)
+  }
   y <- as.numeric(y)
   n <- nrow(X); p <- ncol(X)
 
@@ -172,10 +196,17 @@ bvs_mh <- function(X, y,
 
   # Initialisation
   if (is.null(beta_init) || is.null(gamma_init) || is.null(alpha_init)) {
-    init <- .init_mcmc(p, mu, nu0, sigmasq0, alpha0, beta0, h)
-    if (is.null(beta_init))  beta_init  <- init$beta_init
-    if (is.null(gamma_init)) gamma_init <- init$gamma_init
-    if (is.null(alpha_init)) alpha_init <- init$alpha_init
+    if (use_sparse_backend) {
+      init <- .init_ultra_sparse_state(y, p, beta_init, gamma_init, alpha_init)
+      beta_init <- init$beta_init
+      gamma_init <- init$gamma_init
+      alpha_init <- init$alpha_init
+    } else {
+      init <- .init_mcmc(p, mu, nu0, sigmasq0, alpha0, beta0, h)
+      if (is.null(beta_init))  beta_init  <- init$beta_init
+      if (is.null(gamma_init)) gamma_init <- init$gamma_init
+      if (is.null(alpha_init)) alpha_init <- init$alpha_init
+    }
   }
 
   # ---- Dispatch ----
@@ -239,10 +270,31 @@ bvs_mh <- function(X, y,
         alpha_in = alpha_init)
     },
 
+    "glasso_fixed" = {
+      if (is.null(adj_fixed))
+        stop("adj_type='glasso_fixed' requires 'adj_fixed'.")
+      R_fix <- .prepare_adj(adj_fixed, p, "adj_fixed")
+      adj_est <- estimate_glasso_adj(X, criterion = glasso_criterion)
+      R_glasso <- .prepare_adj(adj_est, p, "glasso_adj")
+      BayesLogit_DualNet_FixedAdj(
+        X = X, y = y, R_dyn_int = R_glasso, R_fix_int = R_fix,
+        niter = as.integer(niter), burnin = as.integer(burnin),
+        mu = mu, nu0 = nu0, sigmasq0 = sigmasq0,
+        alpha0 = alpha0, beta0 = beta0, h = h,
+        e = e_eta, f = f_eta,
+        eta1_sd = eta1_sd, eta2_sd = eta2_sd,
+        mu_tilde = mu_tilde,
+        eta1_tilde = eta1_tilde, eta2_tilde = eta2_tilde,
+        T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
+        thin = as.integer(thin),
+        beta_in = beta_init, gamma_in = as.integer(gamma_init),
+        alpha_in = alpha_init)
+    },
+
     "ggm" = {
       if (sparse) {
-        sp <- prepare_sparse_S(X)
-        BayesLogit_SingleNet_SparseGGM(
+        sp <- .prepare_sparse_S_triplet(X, S_ggm = S_ggm)
+        sparse_result <- BayesLogit_SingleNet_SparseGGM(
           X = X, y = y,
           S_i = sp$S_i, S_p_csc = sp$S_p, S_x = sp$S_x,
           S_diag = sp$S_diag, p_ggm = sp$p,
@@ -258,7 +310,17 @@ bvs_mh <- function(X, y,
           n_mh_gamma = as.integer(n_mh_gamma),
           thin = as.integer(thin),
           beta_in = beta_init, gamma_in = as.integer(gamma_init),
-          alpha_in = alpha_init)
+          alpha_in = alpha_init,
+          store_beta = isTRUE(store_beta),
+          store_gamma = isTRUE(store_gamma),
+          store_Z_list = isTRUE(store_Z_list),
+          store_Z_pip = isTRUE(store_Z_pip)
+        )
+
+        n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
+        sparse_result <- .reconstruct_sparse_pip(sparse_result, p, store_Z_pip)
+        sparse_result <- .reconstruct_gamma_pip(sparse_result, p, n_save, store_gamma)
+        sparse_result
       } else {
         S_ggm <- crossprod(X)
         BayesLogit_SingleNet_GGM(
@@ -281,14 +343,18 @@ bvs_mh <- function(X, y,
     "ggm_fixed" = {
       if (is.null(adj_fixed))
         stop("adj_type='ggm_fixed' requires 'adj_fixed'.")
-      R_fix <- .prepare_adj(adj_fixed, p, "adj_fixed")
       if (sparse) {
-        sp <- prepare_sparse_S(X)
-        BayesLogit_DualNet_SparseGGM(
+        fixed_sp <- .prepare_sparse_adj_triplet(adj_fixed)
+        if (fixed_sp$p != p) {
+          stop("adj_fixed dimension must match ncol(X).")
+        }
+        sp <- .prepare_sparse_S_triplet(X, S_ggm = S_ggm)
+        sparse_result <- BayesLogit_DualNet_SparseGGM(
           X = X, y = y,
           S_i = sp$S_i, S_p_csc = sp$S_p, S_x = sp$S_x,
           S_diag = sp$S_diag,
-          R_fix_int = R_fix, p_ggm = sp$p,
+          R_fix_i = fixed_sp$R_i, R_fix_p_csc = fixed_sp$R_p,
+          p_ggm = sp$p,
           niter = as.integer(niter), burnin = as.integer(burnin),
           mu = mu, nu0 = nu0, sigmasq0 = sigmasq0,
           alpha0 = alpha0, beta0 = beta0, h = h,
@@ -299,10 +365,22 @@ bvs_mh <- function(X, y,
           mu_tilde = mu_tilde,
           eta1_tilde = eta1_tilde, eta2_tilde = eta2_tilde,
           T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
+          n_mh_gamma = as.integer(n_mh_gamma),
           thin = as.integer(thin),
           beta_in = beta_init, gamma_in = as.integer(gamma_init),
-          alpha_in = alpha_init)
+          alpha_in = alpha_init,
+          store_beta = isTRUE(store_beta),
+          store_gamma = isTRUE(store_gamma),
+          store_Z_list = isTRUE(store_Z_list),
+          store_Z_pip = isTRUE(store_Z_pip)
+        )
+
+        n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
+        sparse_result <- .reconstruct_sparse_pip(sparse_result, p, store_Z_pip)
+        sparse_result <- .reconstruct_gamma_pip(sparse_result, p, n_save, store_gamma)
+        sparse_result
       } else {
+        R_fix <- .prepare_adj(adj_fixed, p, "adj_fixed")
         S_ggm <- crossprod(X)
         BayesLogit_DualNet_GGM(
           X = X, y = y, S_ggm = S_ggm, n_ggm = as.double(n),
@@ -335,6 +413,7 @@ bvs_mh <- function(X, y,
     eta_fix = if (!is.null(result$eta_fix)) result$eta_fix else result$eta2,
     Z_list  = result$Z_list,
     Z_pip   = result$Z_pip,
+    gamma_pip = result$gamma_pip,
     call    = mc,
     adj_type = adj_type,
     sampler  = "mh",

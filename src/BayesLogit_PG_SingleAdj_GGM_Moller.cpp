@@ -62,17 +62,14 @@ static inline void mat_remove_rowcol(const arma::mat &src, arma::mat &dest,
     dest.submat(k, k, p - 2, p - 2) = src.submat(k + 1, k + 1, p - 1, p - 1);
 }
 
-static inline void mat_insert_rowcol(arma::mat &target,
-                                     const arma::mat &submat, arma::uword k,
-                                     arma::uword p) {
+static inline void mat_insert_rowcol(arma::mat &target, const arma::mat &submat,
+                                     arma::uword k, arma::uword p) {
   if (k > 0)
     target.submat(0, 0, k - 1, k - 1) = submat.submat(0, 0, k - 1, k - 1);
   if (k > 0 && k < p - 1)
-    target.submat(0, k + 1, k - 1, p - 1) =
-        submat.submat(0, k, k - 1, p - 2);
+    target.submat(0, k + 1, k - 1, p - 1) = submat.submat(0, k, k - 1, p - 2);
   if (k < p - 1 && k > 0)
-    target.submat(k + 1, 0, p - 1, k - 1) =
-        submat.submat(k, 0, p - 2, k - 1);
+    target.submat(k + 1, 0, p - 1, k - 1) = submat.submat(k, 0, p - 2, k - 1);
   if (k < p - 1)
     target.submat(k + 1, k + 1, p - 1, p - 1) =
         submat.submat(k, k, p - 2, p - 2);
@@ -120,14 +117,13 @@ static inline double normal_pdf(double x, double mu, double sigma) {
 
 static inline double approx_erf(double x) {
   double y = 1.0 / (1.0 + 0.3275911 * std::abs(x));
-  double val = 1.0 - (((((+1.061405429 * y - 1.453152027) * y +
-                          1.421413741) *
-                             y -
-                         0.284496736) *
-                            y +
-                        0.254829592) *
-                       y) *
-                          std::exp(-x * x);
+  double val =
+      1.0 - (((((+1.061405429 * y - 1.453152027) * y + 1.421413741) * y -
+               0.284496736) *
+                  y +
+              0.254829592) *
+             y) *
+                std::exp(-x * x);
   return (x >= 0.0) ? val : -val;
 }
 
@@ -166,13 +162,13 @@ static double sample_pg_approx(double z, std::mt19937 &rng) {
 // FIX 3: Pre-allocated std::vector workspace (no Rcpp heap allocation).
 // FIX 4: Sparse adjacency — O(|E|) per sweep instead of O(p^2).
 // =============================================================================
-static void proppwilson_sparse_1eta(
-    const std::vector<std::unordered_set<int>> &Z_active, int p, double mu,
-    double eta1, unsigned int T_max, std::vector<int> &x_up,
-    std::vector<int> &x_down, std::vector<int> &result) {
+static void
+proppwilson_sparse_1eta(const std::vector<std::unordered_set<int>> &Z_active,
+                        int p, double mu, double eta1, unsigned int T_max,
+                        std::vector<int> &x_up, std::vector<int> &x_down,
+                        std::vector<int> &result) {
   unsigned int T = 2;
-  int seed_base =
-      static_cast<int>(std::floor(R::runif(0.0, 1.0) * 1000.0)) + 1;
+  int seed_base = static_cast<int>(std::floor(R::runif(0.0, 1.0) * 1000.0)) + 1;
 
   auto not_coalesced = [&]() {
     for (int k = 0; k < p; ++k)
@@ -289,8 +285,8 @@ static void moller_update_1eta_sparse(
   // 2 PW calls for single eta
   proppwilson_sparse_1eta(Z_active, p, mu, eta1, T_max, pw_x_up, pw_x_down,
                           om1);
-  proppwilson_sparse_1eta(Z_active, p, mu, eta1_new, T_max, pw_x_up,
-                          pw_x_down, om1n);
+  proppwilson_sparse_1eta(Z_active, p, mu, eta1_new, T_max, pw_x_up, pw_x_down,
+                          om1n);
 
   // FIX 5: Sufficient stats — upper triangle only, O(|E|)
   int sum_om1 = 0, sum_om1n = 0;
@@ -310,8 +306,8 @@ static void moller_update_1eta_sparse(
     }
   }
 
-  double log_prior = log_beta_pdf(eta1_new / eta_sd, e, f) -
-                     log_beta_pdf(eta1 / eta_sd, e, f);
+  double log_prior =
+      log_beta_pdf(eta1_new / eta_sd, e, f) - log_beta_pdf(eta1 / eta_sd, e, f);
   double log_target = (eta1_new - eta1) * B_R1 + log_prior;
   double log_aux =
       mu_tilde * (sum_om1n - sum_om1) + eta1_tilde * (A_om1n_R1 - A_om1_R1);
@@ -349,8 +345,8 @@ Rcpp::IntegerMatrix phase_transit_1eta(Rcpp::IntegerMatrix R1, int T_max,
   double eta_tmp = min_eta;
   for (unsigned int i = 0; i < len_eta; ++i) {
     for (unsigned int j = 0; j < num_rep; ++j) {
-      proppwilson_sparse_1eta(Z_adj, p, mu, eta_tmp, T_max, pw_x_up,
-                              pw_x_down, result);
+      proppwilson_sparse_1eta(Z_adj, p, mu, eta_tmp, T_max, pw_x_up, pw_x_down,
+                              result);
       int s = 0;
       for (int k = 0; k < p; ++k)
         s += result[k];
@@ -371,14 +367,14 @@ Rcpp::IntegerMatrix phase_transit_1eta(Rcpp::IntegerMatrix R1, int T_max,
 // [[Rcpp::export]]
 Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
     const arma::mat &X, const arma::vec &y, const arma::mat &S_ggm,
-    double n_ggm, int niter, int burnin,
-    double mu, double nu0, double sigmasq0, double alpha0, double beta0,
-    double h, int n_mh_gamma,
-    double v0_ggm, double v1_ggm, double pii_ggm, double lambda_ggm,
-    double eta_sd, double mu_tilde, double eta1_tilde, double e_eta,
-    double f_eta, unsigned int T_max, int proposal_type,
-    int thin,
-    arma::vec beta_init, arma::uvec gamma_init, double alpha_in) {
+    double n_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0,
+    double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm,
+    double v1_ggm, double pii_ggm, double lambda_ggm, double eta_sd,
+    double mu_tilde, double eta1_tilde, double e_eta, double f_eta,
+    unsigned int T_max, int proposal_type, int thin = 1,
+    Rcpp::Nullable<Rcpp::NumericVector> beta_in = R_NilValue,
+    Rcpp::Nullable<Rcpp::IntegerVector> gamma_in = R_NilValue,
+    double alpha_in = 0.0) {
 
   Rcpp::RNGScope scope;
 
@@ -411,8 +407,22 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
   // =========================================================================
   // 1. INITIALIZATION
   // =========================================================================
-  arma::vec beta_vec = std::move(beta_init);
-  arma::uvec gamma = std::move(gamma_init);
+  arma::vec beta_vec(p, arma::fill::zeros);
+  if (beta_in.isNotNull()) {
+    beta_vec = Rcpp::as<arma::vec>(beta_in);
+  }
+
+  arma::uvec gamma(p, arma::fill::zeros);
+  if (gamma_in.isNotNull()) {
+    gamma = Rcpp::as<arma::uvec>(gamma_in);
+  } else {
+    // If gamma not provided, infer from beta or start full/empty?
+    // Default to empty if beta is zero, or infer.
+    for (arma::uword j = 0; j < p; ++j) {
+      if (std::abs(beta_vec(j)) > 1e-6)
+        gamma(j) = 1;
+    }
+  }
   double alpha = alpha_in;
   double sigmasq = 1.0;
   double eta1 = std::min(0.01, eta_sd * 0.5);
@@ -466,7 +476,8 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
   arma::mat Z_pip(p, p, arma::fill::zeros);
 
   // Sparse Z_list: each entry stores only (row, col) of non-zero edges
-  // in upper triangle. Memory: O(n_save * avg_edges) instead of O(n_save * p^2).
+  // in upper triangle. Memory: O(n_save * avg_edges) instead of O(n_save *
+  // p^2).
   Rcpp::List Z_list(n_save);
   std::vector<int> edge_rows, edge_cols;
   edge_rows.reserve(std::max(1000, n_edges));
@@ -502,8 +513,7 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
       for (arma::uword k = 0, idx = 0; k < p; ++k) {
         if (k == i)
           continue;
-        tau_temp(idx++) =
-            (Z_active[i].count((int)k) > 0) ? v1_ggm : v0_ggm;
+        tau_temp(idx++) = (Z_active[i].count((int)k) > 0) ? v1_ggm : v0_ggm;
       }
 
       double Sigii = Sig_ggm(i, i);
@@ -717,14 +727,12 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
         if (gamma(j) == 1)
           active_idx.push_back(j);
 
-      double sig_prop =
-          std::exp(std::log(sigmasq) + R::rnorm(0, 0.2));
+      double sig_prop = std::exp(std::log(sigmasq) + R::rnorm(0, 0.2));
       sig_prop = std::max(sig_prop, 1e-10); // FIX 10
 
       double shape = nu0 / 2.0;
       double scale = sigmasq0 * nu0 / 2.0;
-      double lp_sig_curr =
-          -(shape + 1.0) * std::log(sigmasq) - scale / sigmasq;
+      double lp_sig_curr = -(shape + 1.0) * std::log(sigmasq) - scale / sigmasq;
       double lp_sig_prop =
           -(shape + 1.0) * std::log(sig_prop) - scale / sig_prop;
 
@@ -735,16 +743,14 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
         ss_b += d2 * d2;
       }
 
-      double lp_b_c =
-          -0.5 * n_act * std::log(sigmasq) - 0.5 * ss_b / sigmasq;
-      double lp_b_p =
-          -0.5 * n_act * std::log(sig_prop) - 0.5 * ss_b / sig_prop;
+      double lp_b_c = -0.5 * n_act * std::log(sigmasq) - 0.5 * ss_b / sigmasq;
+      double lp_b_p = -0.5 * n_act * std::log(sig_prop) - 0.5 * ss_b / sig_prop;
 
       double lp_a_c = -0.5 * std::log(h * sigmasq) -
                       0.5 * (alpha - alpha0) * (alpha - alpha0) / (h * sigmasq);
-      double lp_a_p =
-          -0.5 * std::log(h * sig_prop) -
-          0.5 * (alpha - alpha0) * (alpha - alpha0) / (h * sig_prop);
+      double lp_a_p = -0.5 * std::log(h * sig_prop) - 0.5 * (alpha - alpha0) *
+                                                          (alpha - alpha0) /
+                                                          (h * sig_prop);
 
       double log_accept = (lp_sig_prop + lp_b_p + lp_a_p) -
                           (lp_sig_curr + lp_b_c + lp_a_c) +
@@ -757,10 +763,9 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
     // STEP E: eta1 via Moller + sparse Propp-Wilson (single eta)
     // FIX 3,4,5: Sparse PW, upper-triangle sufficient stats.
     // -----------------------------------------------------------------
-    moller_update_1eta_sparse(Z_active, (int)p, mu, eta1, eta_sd, mu_tilde,
-                              eta1_tilde, gamma, e_eta, f_eta, T_max,
-                              proposal_type, pw_x_up, pw_x_down, pw_om1,
-                              pw_om1n);
+    moller_update_1eta_sparse(
+        Z_active, (int)p, mu, eta1, eta_sd, mu_tilde, eta1_tilde, gamma, e_eta,
+        f_eta, T_max, proposal_type, pw_x_up, pw_x_down, pw_om1, pw_om1n);
 
     // -----------------------------------------------------------------
     // STORE SAMPLES

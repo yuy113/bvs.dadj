@@ -1,7 +1,7 @@
 // =============================================================================
 // BayesLogit_BlockPG.h
 //
-// Shared infrastructure for block-100 gamma updates in PG samplers:
+// Shared infrastructure for blockwise such as 100 gamma updates in PG samplers:
 //   1. Union-Find for Swendsen-Wang cluster detection
 //   2. Swendsen-Wang cluster proposal (single & dual adjacency)
 //   3. Woodbury rank-k covariance updates (bordered matrix inverse)

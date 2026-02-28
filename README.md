@@ -13,7 +13,7 @@ MCMC methods for Bayesian variable selection in logistic regression with Ising/M
 | **Dense & sparse backends** | 12 optimised C++ backends for moderate and high-dimensional settings |
 | **Robust MH acceptance** | `safe_mh_accept()` guards against `log(0)`, NaN, and ±Inf in all MH steps |
 | **Inner gamma/beta thinning** | `n_thin_gb` sub-iterations per MCMC step for better mixing (MH dense backends) |
-| **Ising coupling estimation** | Möller (2006) auxiliary variable MH with Propp-Wilson perfect simulation |
+| **Ising/MRF coupling estimation** | Möller (2006) auxiliary variable MH with Propp-Wilson perfect simulation |
 | **Phase transition detection** | Sweep eta to locate the critical coupling strength and calibrate priors |
 | **Eta hyperparameter tuning** | Grid-search functions to select optimal Möller hyperparameters |
 | **Rich diagnostics** | PIP, trace, ACF plots; Gelman-Rubin PSRF via `coda` |

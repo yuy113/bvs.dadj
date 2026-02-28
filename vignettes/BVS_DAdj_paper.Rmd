@@ -2,13 +2,13 @@
 title: "BVS.DAdj: Bayesian Variable Selection with Dual-Adjacency Network-Informed Ising Priors in R"
 author:
   - name: Yubing Yao
-    affiliation: University of Massachusetts Amherst
+    affiliation: Department of Biostatistics and Epidemiology, University of Massachusetts Amherst
     email: yyao@umass.edu
   - name: Mahlet Tadesse
-    affiliation: Georgetown University
+    affiliation: Department of Mathematics & Statistics, Georgetown University
     email: mgt26@georgetown.edu
   - name: Raji Balasubramanian
-    affiliation: University of Massachusetts Amherst School of Public Health
+    affiliation: Department of Biostatistics and Epidemiology, University of Massachusetts Amherst School of Public Health
     email: rbalasub@schoolph.umass.edu
 abstract: >
   This article introduces the **BVS.DAdj** R package, which implements Bayesian

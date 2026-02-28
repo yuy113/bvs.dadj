@@ -3,7 +3,7 @@
 # ========================================================================
 # These examples use small n, p, niter to run quickly for demonstration.
 # For real analysis, increase niter (e.g. 60,000+) and use appropriate
-# adjacency structures.
+# adjacency matrix representing dependent structures among the predictors.
 # ========================================================================
 
 library(BVS.DAdj)

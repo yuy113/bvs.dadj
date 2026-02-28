@@ -11,7 +11,6 @@ bvs_mh(
   adj_fixed = NULL,
   adj_fixed2 = NULL,
   sparse = FALSE,
-  ultra_sparse = FALSE,
   S_ggm = NULL,
   store_beta = FALSE,
   store_gamma = FALSE,
@@ -21,6 +20,7 @@ bvs_mh(
   niter = 60000L,
   burnin = 10000L,
   thin = 1L,
+  n_thin_gb = 3L,
   nu0 = 2,
   sigmasq0 = 1.5,
   h = 1.5,
@@ -28,7 +28,6 @@ bvs_mh(
   alpha0 = 0,
   beta0 = 0,
   n_mh_gamma = 3L,
-  eta_sd = 0.5,
   eta1_sd = 0.5,
   eta2_sd = 0.5,
   mu_tilde = -4,
@@ -81,6 +80,18 @@ One of:
 (default \code{FALSE}).  Only applicable for \code{adj_type = "ggm"} or
 \code{"ggm_fixed"}.}
 
+\item{S_ggm}{Optional sparse GGM scatter matrix. For ultra-sparse mode,
+supply this explicitly for very large \code{p}.}
+
+\item{store_beta}{Logical; in ultra-sparse mode, store beta draws.}
+
+\item{store_gamma}{Logical; in ultra-sparse mode, store gamma draws.}
+
+\item{store_Z_list}{Logical; in ultra-sparse mode, store per-iteration
+graph snapshots.}
+
+\item{store_Z_pip}{Logical; in ultra-sparse mode, accumulate sparse edge PIPs.}
+
 \item{glasso_criterion}{Character; criterion for graphical lasso model
 selection: \code{"ebic"} (default) or \code{"ric"}.}
 
@@ -89,6 +100,10 @@ selection: \code{"ebic"} (default) or \code{"ric"}.}
 \item{burnin}{Number of burn-in iterations (default 10000).}
 
 \item{thin}{Thinning interval (default 1).}
+
+\item{n_thin_gb}{Number of inner MH sub-iterations for gamma and beta
+per MCMC iteration (default 3). Only used by dense backends; sparse
+backends ignore this parameter for computational efficiency.}
 
 \item{nu0}{Inverse-Gamma shape for sigma^2 (default 2).}
 
@@ -104,11 +119,9 @@ selection: \code{"ebic"} (default) or \code{"ric"}.}
 \item{beta0}{Prior mean for coefficients (default 0).}
 
 \item{n_mh_gamma}{Number of gamma MH updates per MCMC iteration
-(default 3, only used by sparse backends).}
+(default 3; used by GGM/sparse backends).}
 
-\item{eta_sd}{Upper bound for eta (single-eta models, default 0.5).}
-
-\item{eta1_sd}{Upper bound for eta1 (dual-eta models, default 0.5).}
+\item{eta1_sd}{Upper bound for eta1 (single-eta models or dual models, default 0.5).}
 
 \item{eta2_sd}{Upper bound for eta2 (dual-eta models, default 0.5).}
 
@@ -147,12 +160,13 @@ normal (default 1).}
 An object of class \code{"bvs"}, a named list with:
   \describe{
     \item{beta}{Matrix of posterior beta samples (niter x p).}
-    \item{gamma}{Matrix of posterior gamma samples (niter x p).}
+    \item{gamma}{Posterior gamma samples (dense matrix or sparse list,
+      depending on backend/storage options).}
     \item{alpha}{Vector of posterior alpha (intercept) samples.}
     \item{sigmasq}{Vector of posterior sigma^2 samples.}
-    \item{eta_dyn}{Vector of eta1 (dynamic GGM coupling) samples
+    \item{eta1}{Vector of eta1 (dynamic or single-graph coupling) samples
       (if applicable).}
-    \item{eta_fix}{Vector of eta2 (fixed coupling) samples
+    \item{eta2}{Vector of eta2 (fixed coupling) samples
       (if applicable).}
     \item{Z_list}{List of GGM adjacency snapshots (if applicable).}
     \item{call}{The matched call.}
@@ -178,23 +192,30 @@ where R is the adjacency matrix from the chosen \code{adj_type}.
 \examples{
 \dontrun{
 set.seed(42)
-n <- 200; p <- 50
+n <- 200
+p <- 50
 X <- matrix(rnorm(n * p), n, p)
 beta_true <- c(rep(1, 5), rep(0, p - 5))
 y <- rbinom(n, 1, plogis(X \%*\% beta_true))
 
 # Single fixed adjacency
-R <- diag(0, p); R[1:5, 1:5] <- 1; diag(R) <- 0
+R <- diag(0, p)
+R[1:5, 1:5] <- 1
+diag(R) <- 0
 fit <- bvs_mh(X, y, adj_type = "fixed", adj_fixed = R, niter = 5000)
 summary(fit)
 
 # Glasso-estimated adjacency with EBIC
-fit2 <- bvs_mh(X, y, adj_type = "glasso", glasso_criterion = "ebic",
-               niter = 5000)
+fit2 <- bvs_mh(X, y,
+  adj_type = "glasso", glasso_criterion = "ebic",
+  niter = 5000
+)
 
 # Dual network: glasso-estimated + external fixed adjacency
-fit2b <- bvs_mh(X, y, adj_type = "glasso_fixed", adj_fixed = R,
-                glasso_criterion = "ebic", niter = 5000)
+fit2b <- bvs_mh(X, y,
+  adj_type = "glasso_fixed", adj_fixed = R,
+  glasso_criterion = "ebic", niter = 5000
+)
 
 # Sparse Bayesian GGM adjacency
 fit3 <- bvs_mh(X, y, adj_type = "ggm", sparse = TRUE, niter = 5000)

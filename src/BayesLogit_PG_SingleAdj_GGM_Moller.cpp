@@ -32,6 +32,8 @@
 
 // [[Rcpp::depends(RcppArmadillo)]]
 #include <RcppArmadillo.h>
+#include "BayesLogit_Numerics.h"
+#include "BayesLogit_BlockPG.h"
 #include <algorithm>
 #include <cmath>
 #include <random>
@@ -244,8 +246,8 @@ proppwilson_sparse_1eta(const std::vector<std::unordered_set<int>> &Z_active,
 // =============================================================================
 static void moller_update_1eta_sparse(
     const std::vector<std::unordered_set<int>> &Z_active, int p, double mu,
-    double &eta1, double eta_sd, double mu_tilde, double eta1_tilde,
-    const arma::uvec &gamma, double e, double f, unsigned int T_max,
+    double &eta1, double eta1_sd, double mu_tilde, double eta1_tilde,
+    const arma::uvec &gamma, double e_eta, double f_eta, unsigned int T_max,
     int proposal_type, std::vector<int> &pw_x_up, std::vector<int> &pw_x_down,
     std::vector<int> &om1, std::vector<int> &om1n) {
   double eta1_new;
@@ -255,32 +257,32 @@ static void moller_update_1eta_sparse(
     // Uniform window proposal bounded to (0, eta_sd)
     double hw = 0.01;
     double a1 = std::max(0.0, eta1 - hw);
-    double b1 = std::min(eta_sd, eta1 + hw);
+    double b1 = std::min(eta1_sd, eta1 + hw);
     eta1_new = R::runif(a1, b1);
     double c1 = std::max(0.0, eta1_new - hw);
-    double d1 = std::min(eta_sd, eta1_new + hw);
+    double d1 = std::min(eta1_sd, eta1_new + hw);
     log_prop_ratio = std::log(b1 - a1) - std::log(d1 - c1);
   } else {
     // Truncated normal proposal
     int attempts = 0;
     do {
-      eta1_new = R::rnorm(eta1, eta_sd);
+      eta1_new = R::rnorm(eta1, eta1_sd);
       if (++attempts > 10000) {
         eta1_new = eta1;
         break;
       }
-    } while (eta1_new <= 0.0 || eta1_new >= eta_sd);
+    } while (eta1_new <= 0.0 || eta1_new >= eta1_sd);
 
-    double log_q_fwd = std::log(normal_pdf(eta1_new, eta1, eta_sd)) -
-                       std::log(normal_cdf(eta_sd, eta1, eta_sd) -
-                                normal_cdf(0.0, eta1, eta_sd));
-    double log_q_rev = std::log(normal_pdf(eta1, eta1_new, eta_sd)) -
-                       std::log(normal_cdf(eta_sd, eta1_new, eta_sd) -
-                                normal_cdf(0.0, eta1_new, eta_sd));
+    double log_q_fwd = std::log(normal_pdf(eta1_new, eta1, eta1_sd)) -
+                       std::log(normal_cdf(eta1_sd, eta1, eta1_sd) -
+                                normal_cdf(0.0, eta1, eta1_sd));
+    double log_q_rev = std::log(normal_pdf(eta1, eta1_new, eta1_sd)) -
+                       std::log(normal_cdf(eta1_sd, eta1_new, eta1_sd) -
+                                normal_cdf(0.0, eta1_new, eta1_sd));
     log_prop_ratio = log_q_rev - log_q_fwd;
   }
 
-  eta1_new = std::max(1e-8, std::min(eta_sd - 1e-8, eta1_new));
+  eta1_new = std::max(1e-8, std::min(eta1_sd - 1e-8, eta1_new));
 
   // 2 PW calls for single eta
   proppwilson_sparse_1eta(Z_active, p, mu, eta1, T_max, pw_x_up, pw_x_down,
@@ -306,8 +308,8 @@ static void moller_update_1eta_sparse(
     }
   }
 
-  double log_prior =
-      log_beta_pdf(eta1_new / eta_sd, e, f) - log_beta_pdf(eta1 / eta_sd, e, f);
+  double log_prior = log_beta_pdf(eta1_new / eta1_sd, e_eta, f_eta) -
+                     log_beta_pdf(eta1 / eta1_sd, e_eta, f_eta);
   double log_target = (eta1_new - eta1) * B_R1 + log_prior;
   double log_aux =
       mu_tilde * (sum_om1n - sum_om1) + eta1_tilde * (A_om1n_R1 - A_om1_R1);
@@ -316,7 +318,7 @@ static void moller_update_1eta_sparse(
 
   double log_MH = log_target + log_aux + log_norm + log_prop_ratio;
 
-  if (std::log(R::runif(0.0, 1.0)) < log_MH)
+  if (bvs_dadj::safe_mh_accept(log_MH))
     eta1 = eta1_new;
 }
 
@@ -369,12 +371,12 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
     const arma::mat &X, const arma::vec &y, const arma::mat &S_ggm,
     double n_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0,
     double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm,
-    double v1_ggm, double pii_ggm, double lambda_ggm, double eta_sd,
+    double v1_ggm, double pii_ggm, double lambda_ggm, double eta1_sd,
     double mu_tilde, double eta1_tilde, double e_eta, double f_eta,
     unsigned int T_max, int proposal_type, int thin = 1,
     Rcpp::Nullable<Rcpp::NumericVector> beta_in = R_NilValue,
     Rcpp::Nullable<Rcpp::IntegerVector> gamma_in = R_NilValue,
-    double alpha_in = 0.0) {
+    double alpha_in = 0.0, int block_size = 1, int pcg_threshold = 500) {
 
   Rcpp::RNGScope scope;
 
@@ -425,7 +427,7 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
   }
   double alpha = alpha_in;
   double sigmasq = 1.0;
-  double eta1 = std::min(0.01, eta_sd * 0.5);
+  double eta1 = std::min(0.01, eta1_sd * 0.5);
 
   arma::vec Xb = X * beta_vec; // FIX 12: cached X*beta
   arma::vec omega_pg(n, arma::fill::ones);
@@ -622,35 +624,47 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
       arma::uvec active_uv(active_idx.data(), p_active, false, true);
       arma::mat X_act = X.cols(active_uv);
 
-      arma::mat Xt_Om = X_act.t();
-      Xt_Om.each_row() %= omega_pg.t();
-      arma::mat prec_beta = Xt_Om * X_act;
-      prec_beta.diag() += 1.0 / sigmasq;
-
-      arma::vec z_star = kappa - omega_pg * alpha;
-      arma::vec mean_rhs = X_act.t() * z_star;
-
-      // FIX 14: Progressive Cholesky jittering
-      arma::mat L_prec;
-      bool chol_ok = arma::chol(L_prec, arma::symmatu(prec_beta));
-      if (!chol_ok) {
-        double jitter = 1e-8;
-        for (int attempt = 0; attempt < 5 && !chol_ok; ++attempt) {
-          prec_beta.diag() += jitter;
-          chol_ok = arma::chol(L_prec, arma::symmatu(prec_beta));
-          jitter *= 10.0;
+      if (block_size > 1 && (int)p_active > pcg_threshold) {
+        // PCG path for large active sets
+        bvs_dadj_block::PCGConfig pcg_cfg(1e-6, 200, pcg_threshold);
+        arma::vec beta_act;
+        bool pcg_ok = bvs_dadj_block::pcg_sample_beta(
+            beta_act, X_act, omega_pg, kappa, alpha, 1.0 / sigmasq, pcg_cfg);
+        if (pcg_ok && beta_act.n_elem == p_active) {
+          beta_vec.zeros();
+          beta_vec.elem(active_uv) = beta_act;
         }
-      }
-      if (chol_ok) {
-        arma::vec m_beta = arma::solve(arma::trimatl(L_prec.t()), mean_rhs,
-                                       arma::solve_opts::fast);
-        m_beta =
-            arma::solve(arma::trimatu(L_prec), m_beta, arma::solve_opts::fast);
-        arma::vec zz = arma::randn<arma::vec>(p_active);
-        arma::vec b_draw = m_beta + arma::solve(arma::trimatu(L_prec), zz,
-                                                arma::solve_opts::fast);
-        beta_vec.zeros();
-        beta_vec.elem(active_uv) = b_draw;
+      } else {
+        // Original Cholesky path
+        arma::mat Xt_Om = X_act.t();
+        Xt_Om.each_row() %= omega_pg.t();
+        arma::mat prec_beta = Xt_Om * X_act;
+        prec_beta.diag() += 1.0 / sigmasq;
+
+        arma::vec z_star = kappa - omega_pg * alpha;
+        arma::vec mean_rhs = X_act.t() * z_star;
+
+        arma::mat L_prec;
+        bool chol_ok = arma::chol(L_prec, arma::symmatu(prec_beta));
+        if (!chol_ok) {
+          double jitter = 1e-8;
+          for (int attempt = 0; attempt < 5 && !chol_ok; ++attempt) {
+            prec_beta.diag() += jitter;
+            chol_ok = arma::chol(L_prec, arma::symmatu(prec_beta));
+            jitter *= 10.0;
+          }
+        }
+        if (chol_ok) {
+          arma::vec m_beta = arma::solve(arma::trimatl(L_prec.t()), mean_rhs,
+                                         arma::solve_opts::fast);
+          m_beta =
+              arma::solve(arma::trimatu(L_prec), m_beta, arma::solve_opts::fast);
+          arma::vec zz = arma::randn<arma::vec>(p_active);
+          arma::vec b_draw = m_beta + arma::solve(arma::trimatu(L_prec), zz,
+                                                  arma::solve_opts::fast);
+          beta_vec.zeros();
+          beta_vec.elem(active_uv) = b_draw;
+        }
       }
     } else {
       beta_vec.zeros();
@@ -678,43 +692,60 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
     //   => P(gamma_j=1|rest) = sigma(mu + eta1*sum_{k~j} gamma_k)
     // FIX 13: Pre-allocated z_prop.
     // -----------------------------------------------------------------
-    arma::vec z = Xb; // FIX 12: reuse cached Xb
-    double loglik = calc_loglik(y01, z, alpha);
-
-    for (int mh = 0; mh < n_mh_gamma; ++mh) {
-      arma::uword j =
-          static_cast<arma::uword>(std::floor(R::runif(0.0, (double)p)));
-      if (j >= p)
-        j = p - 1;
-
-      int g_curr = (int)gamma(j);
-      int g_prop = 1 - g_curr;
-      double b_curr = beta_vec(j);
-      double b_prop = (g_prop == 1) ? R::rnorm(beta0, sd_sig) : 0.0;
-
-      z_prop = z + (b_prop - b_curr) * X.col(j);
-      double ll_prop = calc_loglik(y01, z_prop, alpha);
-
-      double diff = (double)(g_prop - g_curr);
-
-      // FIX 6: Sparse neighborhood sum, no factor of 2
-      double neigh_ggm = 0.0;
-      for (int nbr : Z_active[j])
-        neigh_ggm += gamma(nbr);
-
-      double ising_diff = diff * (mu + eta1 * neigh_ggm);
-      double log_ratio = (ll_prop - loglik) + ising_diff;
-
-      if (std::log(R::runif(0, 1)) < log_ratio) {
-        gamma(j) = g_prop;
-        beta_vec(j) = b_prop;
-        z = z_prop;
-        loglik = ll_prop;
+    if (block_size > 1) {
+      // Block update: SW + Uncollapsed Gibbs (single GGM adjacency)
+      auto gamma_u8 = bvs_dadj_block::gamma_to_uint8(gamma);
+      auto neigh_fn = [&](int jj, std::function<void(int)> cb) {
+        for (int nbr : Z_active[jj])
+          cb(nbr);
+      };
+      auto proposal = bvs_dadj_block::swendsen_wang_single(
+          gamma_u8, eta1, (int)p, block_size, neigh_fn);
+      auto block = bvs_dadj_block::flatten_clusters(proposal);
+      if (!block.empty()) {
+        bvs_dadj_block::uncollapsed_gamma_sweep_single(
+            gamma_u8, beta_vec, Xb, X, y01, alpha, sigmasq, beta0,
+            mu, eta1, block, neigh_fn);
+        bvs_dadj_block::uint8_to_gamma(gamma, gamma_u8);
       }
-    }
+    } else {
+      // Original single-variable MH
+      arma::vec z = Xb;
+      double loglik = calc_loglik(y01, z, alpha);
 
-    // FIX 12: Update cached Xb after gamma changes
-    Xb = z;
+      for (int mh = 0; mh < n_mh_gamma; ++mh) {
+        arma::uword j =
+            static_cast<arma::uword>(std::floor(R::runif(0.0, (double)p)));
+        if (j >= p)
+          j = p - 1;
+
+        int g_curr = (int)gamma(j);
+        int g_prop = 1 - g_curr;
+        double b_curr = beta_vec(j);
+        double b_prop = (g_prop == 1) ? R::rnorm(beta0, sd_sig) : 0.0;
+
+        z_prop = z + (b_prop - b_curr) * X.col(j);
+        double ll_prop = calc_loglik(y01, z_prop, alpha);
+
+        double diff = (double)(g_prop - g_curr);
+
+        double neigh_ggm = 0.0;
+        for (int nbr : Z_active[j])
+          neigh_ggm += gamma(nbr);
+
+        double ising_diff = diff * (mu + eta1 * neigh_ggm);
+        double log_ratio = (ll_prop - loglik) + ising_diff;
+
+        if (bvs_dadj::safe_mh_accept(log_ratio)) {
+          gamma(j) = g_prop;
+          beta_vec(j) = b_prop;
+          z = z_prop;
+          loglik = ll_prop;
+        }
+      }
+
+      Xb = z;
+    }
 
     // -----------------------------------------------------------------
     // STEP D: SigmaSq via log-normal MH
@@ -755,7 +786,7 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
       double log_accept = (lp_sig_prop + lp_b_p + lp_a_p) -
                           (lp_sig_curr + lp_b_c + lp_a_c) +
                           std::log(sig_prop / sigmasq);
-      if (std::log(R::runif(0.0, 1.0)) < log_accept)
+      if (bvs_dadj::safe_mh_accept(log_accept))
         sigmasq = sig_prop;
     }
 
@@ -764,7 +795,7 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
     // FIX 3,4,5: Sparse PW, upper-triangle sufficient stats.
     // -----------------------------------------------------------------
     moller_update_1eta_sparse(
-        Z_active, (int)p, mu, eta1, eta_sd, mu_tilde, eta1_tilde, gamma, e_eta,
+        Z_active, (int)p, mu, eta1, eta1_sd, mu_tilde, eta1_tilde, gamma, e_eta,
         f_eta, T_max, proposal_type, pw_x_up, pw_x_down, pw_om1, pw_om1n);
 
     // -----------------------------------------------------------------

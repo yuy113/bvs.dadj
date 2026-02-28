@@ -33,8 +33,6 @@
 #' @param sparse    Logical; use the sparse high-dimensional backend
 #'   (default \code{FALSE}).  Applicable for \code{adj_type = "ggm"} or
 #'   \code{"ggm_fixed"}.
-#' @param ultra_sparse Logical; when \code{TRUE} with \code{sparse = TRUE},
-#'   route to ultra-sparse sparse-matrix backends for high-dimensional runs.
 #' @param S_ggm Optional sparse GGM scatter matrix. For ultra-sparse mode,
 #'   supply this explicitly for very large \code{p}.
 #' @param store_beta Logical; in ultra-sparse mode, store beta draws.
@@ -58,9 +56,8 @@
 #' @param beta0     Prior mean for coefficients (default 0).
 #'
 #' @param n_mh_gamma  Number of gamma MH updates per MCMC iteration
-#'   (default 3).
-#' @param eta_sd    Upper bound for eta (single-eta models, default 0.5).
-#' @param eta1_sd   Upper bound for eta1 (dual-eta models, default 0.5).
+#'   (default 3; used by GGM/sparse backends).
+#' @param eta1_sd   Upper bound for eta1 (single-eta models or dual models, default 0.5).
 #' @param eta2_sd   Upper bound for eta2 (dual-eta models, default 0.5).
 #' @param mu_tilde  Auxiliary MRF external field for Moller update
 #'   (default -4).
@@ -78,6 +75,13 @@
 #'   (default \code{30/(p-1)}).
 #' @param lambda_ggm GGM prior scale (default 1).
 #'
+#' @param block_size  Integer; block size for Swendsen-Wang cluster updates.
+#'   Default 1 (original single-variable MH).  Set to e.g. 100 to enable
+#'   block updates with Swendsen-Wang clustering and uncollapsed Gibbs.
+#' @param pcg_threshold  Integer; when \code{block_size > 1} and the number of
+#'   active variables exceeds this threshold, use PCG instead of Cholesky for
+#'   beta sampling (default 500).
+#'
 #' @param beta_init  Optional initial beta (numeric vector of length p).
 #' @param gamma_init Optional initial gamma (integer vector of length p).
 #' @param alpha_init Optional initial intercept (numeric scalar).
@@ -85,12 +89,13 @@
 #' @return An object of class \code{"bvs"}, a named list with:
 #'   \describe{
 #'     \item{beta}{Matrix of posterior beta samples (niter x p).}
-#'     \item{gamma}{Matrix of posterior gamma samples (niter x p).}
+#'     \item{gamma}{Posterior gamma samples (dense matrix or sparse list,
+#'       depending on backend/storage options).}
 #'     \item{alpha}{Vector of posterior alpha (intercept) samples.}
 #'     \item{sigmasq}{Vector of posterior sigma^2 samples.}
-#'     \item{eta_dyn}{Vector of eta1 (dynamic GGM coupling) samples
+#'     \item{eta1}{Vector of eta1 (dynamic or single-graph coupling) samples
 #'       (if applicable).}
-#'     \item{eta_fix}{Vector of eta2 (fixed coupling) samples
+#'     \item{eta2}{Vector of eta2 (fixed coupling) samples
 #'       (if applicable).}
 #'     \item{Z_list}{List of GGM adjacency snapshots (if applicable).}
 #'     \item{call}{The matched call.}
@@ -106,20 +111,27 @@
 #' @examples
 #' \dontrun{
 #' set.seed(42)
-#' n <- 200; p <- 50
+#' n <- 200
+#' p <- 50
 #' X <- matrix(rnorm(n * p), n, p)
 #' beta_true <- c(rep(1, 5), rep(0, p - 5))
 #' y <- rbinom(n, 1, plogis(X %*% beta_true))
 #'
 #' # PG with glasso adjacency (EBIC selection)
-#' fit <- bvs_pg(X, y, adj_type = "glasso", glasso_criterion = "ebic",
-#'               niter = 5000)
+#' fit <- bvs_pg(X, y,
+#'   adj_type = "glasso", glasso_criterion = "ebic",
+#'   niter = 5000
+#' )
 #' summary(fit)
 #'
 #' # PG with dual network: glasso-estimated + external fixed adjacency
-#' R_fix <- diag(0, p); R_fix[1:5, 1:5] <- 1; diag(R_fix) <- 0
-#' fit1b <- bvs_pg(X, y, adj_type = "glasso_fixed", adj_fixed = R_fix,
-#'                 glasso_criterion = "ebic", niter = 5000)
+#' R_fix <- diag(0, p)
+#' R_fix[1:5, 1:5] <- 1
+#' diag(R_fix) <- 0
+#' fit1b <- bvs_pg(X, y,
+#'   adj_type = "glasso_fixed", adj_fixed = R_fix,
+#'   glasso_criterion = "ebic", niter = 5000
+#' )
 #'
 #' # PG with sparse GGM adjacency
 #' fit2 <- bvs_pg(X, y, adj_type = "ggm", sparse = TRUE, niter = 5000)
@@ -130,57 +142,60 @@
 #'
 #' @export
 bvs_pg <- function(X, y,
-                   adj_type = c("fixed", "dual_fixed", "glasso",
-                                "glasso_fixed", "ggm", "ggm_fixed"),
-                   adj_fixed  = NULL,
+                   adj_type = c(
+                     "fixed", "dual_fixed", "glasso",
+                     "glasso_fixed", "ggm", "ggm_fixed"
+                   ),
+                   adj_fixed = NULL,
                    adj_fixed2 = NULL,
                    sparse = FALSE,
-                   ultra_sparse = FALSE,
                    S_ggm = NULL,
                    store_beta = FALSE,
                    store_gamma = FALSE,
                    store_Z_list = FALSE,
                    store_Z_pip = TRUE,
                    glasso_criterion = c("ebic", "ric"),
-
                    # MCMC control
-                   niter  = 60000L,
+                   niter = 60000L,
                    burnin = 10000L,
-                   thin   = 1L,
-
+                   thin = 1L,
                    # Variable selection priors
                    nu0 = 2, sigmasq0 = 1.5, h = 1.5,
-                   mu = -log(1/0.3 - 1),
+                   mu = -log(1 / 0.3 - 1),
                    alpha0 = 0, beta0 = 0,
-
                    # Gamma / Ising
                    n_mh_gamma = 3L,
-                   eta_sd  = 0.5,
                    eta1_sd = 0.5, eta2_sd = 0.5,
                    mu_tilde = -4,
                    eta1_tilde = 0.075, eta2_tilde = 0.065,
                    e_eta = 2, f_eta = 1,
                    Tmax = 64L,
                    proposal_type = 1L,
-
                    # GGM SSVS
                    v0_ggm = 0.015^2,
                    v1_ggm = NULL,
                    pii_ggm = NULL,
                    lambda_ggm = 1,
-
+                   # Block update
+                   block_size = 1L,
+                   pcg_threshold = 500L,
                    # Init (optional)
-                   beta_init  = NULL,
+                   beta_init = NULL,
                    gamma_init = NULL,
                    alpha_init = NULL) {
-
   mc <- match.call()
   adj_type <- match.arg(adj_type)
   glasso_criterion <- match.arg(glasso_criterion)
 
+  block_size <- as.integer(block_size)
+  pcg_threshold <- as.integer(pcg_threshold)
+  if (block_size < 1L) stop("block_size must be >= 1.", call. = FALSE)
+  if (pcg_threshold < 1L) stop("pcg_threshold must be >= 1.", call. = FALSE)
+
   if (isTRUE(sparse) && !adj_type %in% c("ggm", "ggm_fixed")) {
     warning("sparse=TRUE is only implemented for adj_type='ggm' or 'ggm_fixed'; using dense backend.",
-            call. = FALSE)
+      call. = FALSE
+    )
   }
 
   # Dimensions
@@ -191,7 +206,8 @@ bvs_pg <- function(X, y,
     X <- as.matrix(X)
   }
   y <- as.numeric(y)
-  n <- nrow(X); p <- ncol(X)
+  n <- nrow(X)
+  p <- ncol(X)
 
   # Derived GGM defaults
   if (is.null(v1_ggm)) v1_ggm <- (50^2) * v0_ggm
@@ -206,7 +222,7 @@ bvs_pg <- function(X, y,
       alpha_init <- init$alpha_init
     } else {
       init <- .init_mcmc(p, mu, nu0, sigmasq0, alpha0, beta0, h)
-      if (is.null(beta_init))  beta_init  <- init$beta_init
+      if (is.null(beta_init)) beta_init <- init$beta_init
       if (is.null(gamma_init)) gamma_init <- init$gamma_init
       if (is.null(alpha_init)) alpha_init <- init$alpha_init
     }
@@ -214,10 +230,10 @@ bvs_pg <- function(X, y,
 
   # ---- Dispatch ----
   result <- switch(adj_type,
-
     "fixed" = {
-      if (is.null(adj_fixed))
+      if (is.null(adj_fixed)) {
         stop("adj_type='fixed' requires 'adj_fixed'.")
+      }
       R_mat <- .prepare_adj(adj_fixed, p, "adj_fixed")
       BayesLogit_PG_SingleAdj(
         X = X, y = y, R_adj_int = R_mat,
@@ -225,19 +241,21 @@ bvs_pg <- function(X, y,
         mu = mu, nu0 = nu0, sigmasq0 = sigmasq0,
         alpha0 = alpha0, beta0 = beta0, h = h,
         n_mh_gamma = as.integer(n_mh_gamma),
-        eta_sd = eta_sd, mu_tilde = mu_tilde,
-        eta_tilde = eta1_tilde,
-        e = e_eta, f = f_eta,
+        eta1_sd = eta1_sd, mu_tilde = mu_tilde,
+        eta1_tilde = eta1_tilde,
+        e_eta = e_eta, f_eta = f_eta,
         T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
         thin = as.integer(thin),
         beta_in = beta_init, gamma_in = as.integer(gamma_init),
-        alpha_in = alpha_init)
+        alpha_in = alpha_init,
+        block_size = block_size, pcg_threshold = pcg_threshold
+      )
     },
-
     "dual_fixed" = {
-      if (is.null(adj_fixed) || is.null(adj_fixed2))
+      if (is.null(adj_fixed) || is.null(adj_fixed2)) {
         stop("adj_type='dual_fixed' requires both 'adj_fixed' and 'adj_fixed2'.")
-      R1 <- .prepare_adj(adj_fixed,  p, "adj_fixed")
+      }
+      R1 <- .prepare_adj(adj_fixed, p, "adj_fixed")
       R2 <- .prepare_adj(adj_fixed2, p, "adj_fixed2")
       BayesLogit_PG_DualAdj(
         X = X, y = y,
@@ -249,13 +267,14 @@ bvs_pg <- function(X, y,
         eta1_sd = eta1_sd, eta2_sd = eta2_sd,
         mu_tilde = mu_tilde,
         eta1_tilde = eta1_tilde, eta2_tilde = eta2_tilde,
-        e = e_eta, f = f_eta,
+        e_eta = e_eta, f_eta = f_eta,
         T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
         thin = as.integer(thin),
         beta_in = beta_init, gamma_in = as.integer(gamma_init),
-        alpha_in = alpha_init)
+        alpha_in = alpha_init,
+        block_size = block_size, pcg_threshold = pcg_threshold
+      )
     },
-
     "glasso" = {
       adj_est <- estimate_glasso_adj(X, criterion = glasso_criterion)
       R_mat <- .prepare_adj(adj_est, p, "glasso_adj")
@@ -265,18 +284,20 @@ bvs_pg <- function(X, y,
         mu = mu, nu0 = nu0, sigmasq0 = sigmasq0,
         alpha0 = alpha0, beta0 = beta0, h = h,
         n_mh_gamma = as.integer(n_mh_gamma),
-        eta_sd = eta_sd, mu_tilde = mu_tilde,
-        eta_tilde = eta1_tilde,
-        e = e_eta, f = f_eta,
+        eta1_sd = eta1_sd, mu_tilde = mu_tilde,
+        eta1_tilde = eta1_tilde,
+        e_eta = e_eta, f_eta = f_eta,
         T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
         thin = as.integer(thin),
         beta_in = beta_init, gamma_in = as.integer(gamma_init),
-        alpha_in = alpha_init)
+        alpha_in = alpha_init,
+        block_size = block_size, pcg_threshold = pcg_threshold
+      )
     },
-
     "glasso_fixed" = {
-      if (is.null(adj_fixed))
+      if (is.null(adj_fixed)) {
         stop("adj_type='glasso_fixed' requires 'adj_fixed'.")
+      }
       R_fix <- .prepare_adj(adj_fixed, p, "adj_fixed")
       adj_est <- estimate_glasso_adj(X, criterion = glasso_criterion)
       R_glasso <- .prepare_adj(adj_est, p, "glasso_adj")
@@ -290,13 +311,14 @@ bvs_pg <- function(X, y,
         eta1_sd = eta1_sd, eta2_sd = eta2_sd,
         mu_tilde = mu_tilde,
         eta1_tilde = eta1_tilde, eta2_tilde = eta2_tilde,
-        e = e_eta, f = f_eta,
+        e_eta = e_eta, f_eta = f_eta,
         T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
         thin = as.integer(thin),
         beta_in = beta_init, gamma_in = as.integer(gamma_init),
-        alpha_in = alpha_init)
+        alpha_in = alpha_init,
+        block_size = block_size, pcg_threshold = pcg_threshold
+      )
     },
-
     "ggm" = {
       if (sparse) {
         sp <- .prepare_sparse_S_triplet(X, S_ggm = S_ggm)
@@ -310,7 +332,7 @@ bvs_pg <- function(X, y,
           n_mh_gamma = as.integer(n_mh_gamma),
           v0_ggm = v0_ggm, v1_ggm = v1_ggm,
           pii_ggm = pii_ggm,
-          eta_sd = eta_sd, mu_tilde = mu_tilde,
+          eta1_sd = eta1_sd, mu_tilde = mu_tilde,
           eta1_tilde = eta1_tilde,
           e_eta = e_eta, f_eta = f_eta,
           T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
@@ -320,7 +342,8 @@ bvs_pg <- function(X, y,
           store_beta = isTRUE(store_beta),
           store_gamma = isTRUE(store_gamma),
           store_Z_list = isTRUE(store_Z_list),
-          store_Z_pip = isTRUE(store_Z_pip)
+          store_Z_pip = isTRUE(store_Z_pip),
+          block_size = block_size, pcg_threshold = pcg_threshold
         )
 
         n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
@@ -338,19 +361,21 @@ bvs_pg <- function(X, y,
           n_mh_gamma = as.integer(n_mh_gamma),
           v0_ggm = v0_ggm, v1_ggm = v1_ggm,
           pii_ggm = pii_ggm, lambda_ggm = lambda_ggm,
-          eta_sd = eta_sd, mu_tilde = mu_tilde,
+          eta1_sd = eta1_sd, mu_tilde = mu_tilde,
           eta1_tilde = eta1_tilde,
           e_eta = e_eta, f_eta = f_eta,
           T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
           thin = as.integer(thin),
           beta_in = beta_init, gamma_in = as.integer(gamma_init),
-          alpha_in = alpha_init)
+          alpha_in = alpha_init,
+          block_size = block_size, pcg_threshold = pcg_threshold
+        )
       }
     },
-
     "ggm_fixed" = {
-      if (is.null(adj_fixed))
+      if (is.null(adj_fixed)) {
         stop("adj_type='ggm_fixed' requires 'adj_fixed'.")
+      }
       if (sparse) {
         fixed_sp <- .prepare_sparse_adj_triplet(adj_fixed)
         if (fixed_sp$p != p) {
@@ -380,7 +405,8 @@ bvs_pg <- function(X, y,
           store_beta = isTRUE(store_beta),
           store_gamma = isTRUE(store_gamma),
           store_Z_list = isTRUE(store_Z_list),
-          store_Z_pip = isTRUE(store_Z_pip)
+          store_Z_pip = isTRUE(store_Z_pip),
+          block_size = block_size, pcg_threshold = pcg_threshold
         )
 
         n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
@@ -406,29 +432,31 @@ bvs_pg <- function(X, y,
           T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
           thin = as.integer(thin),
           beta_in = beta_init, gamma_in = as.integer(gamma_init),
-          alpha_in = alpha_init)
+          alpha_in = alpha_init,
+          block_size = block_size, pcg_threshold = pcg_threshold
+        )
       }
     }
   )
 
   # Package result
   out <- list(
-    beta    = result$beta,
-    gamma   = result$gamma,
-    alpha   = if (!is.null(result$alpha)) as.vector(result$alpha) else NULL,
+    beta = result$beta,
+    gamma = result$gamma,
+    alpha = if (!is.null(result$alpha)) as.vector(result$alpha) else NULL,
     sigmasq = if (!is.null(result$sigmasq)) as.vector(result$sigmasq) else NULL,
-    eta_dyn = if (!is.null(result$eta_dyn)) result$eta_dyn else result$eta1,
-    eta_fix = if (!is.null(result$eta_fix)) result$eta_fix else result$eta2,
-    Z_list  = result$Z_list,
-    Z_pip   = result$Z_pip,
+    eta1 = result$eta1,
+    eta2 = result$eta2,
+    Z_list = result$Z_list,
+    Z_pip = result$Z_pip,
     gamma_pip = result$gamma_pip,
-    call    = mc,
+    call = mc,
     adj_type = adj_type,
-    sampler  = "pg",
-    niter    = niter,
-    burnin   = burnin,
-    p        = p,
-    n        = n
+    sampler = "pg",
+    niter = niter,
+    burnin = burnin,
+    p = p,
+    n = n
   )
   class(out) <- "bvs"
   out

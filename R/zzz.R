@@ -2,7 +2,7 @@
 #' @importFrom Rcpp evalCpp
 #' @importFrom Matrix sparseMatrix
 #' @importFrom graphics abline barplot legend
-#' @importFrom methods as
+#' @importFrom methods as slotNames
 #' @importFrom stats plogis rbinom rgamma rnorm quantile
 #' @keywords internal
 "_PACKAGE"

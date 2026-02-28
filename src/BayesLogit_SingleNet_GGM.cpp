@@ -1,4 +1,5 @@
 // [[Rcpp::depends(RcppArmadillo)]]
+#include "BayesLogit_Numerics.h"
 #include <RcppArmadillo.h>
 #include <algorithm>
 #include <cmath>
@@ -6,7 +7,6 @@
 #include <vector>
 
 namespace {
-
 
 // =============================================================================
 // SECTION 1: HELPER FUNCTIONS
@@ -98,6 +98,7 @@ static inline double normal_cdf(double x, double mu, double sigma) {
 
 // Log Beta density: log Beta(x | a, b)
 static inline double log_beta_pdf(double x, double a, double b) {
+  x = std::max(1e-12, std::min(1.0 - 1e-12, x));
   return std::lgamma(a + b) - std::lgamma(a) - std::lgamma(b) +
          (a - 1.0) * std::log(x) + (b - 1.0) * std::log(1.0 - x);
 }
@@ -188,7 +189,7 @@ static Rcpp::IntegerVector proppwilson_omega(const arma::Mat<uint8_t> &Z,
 static void moller_update_eta(const arma::Mat<uint8_t> &Z, double mu,
                               double &eta1, double eta1_sd, double mu_tilde,
                               double eta1_tilde, const arma::uvec &gamma,
-                              double e, double f, unsigned int T_max,
+                              double e_eta, double f_eta, unsigned int T_max,
                               int proposal_type) {
   const unsigned int p = Z.n_cols;
   double eta1_new;
@@ -247,8 +248,8 @@ static void moller_update_eta(const arma::Mat<uint8_t> &Z, double mu,
   }
 
   // Prior ratio (scaled Beta)
-  double log_prior_eta1 = log_beta_pdf(eta1_new / eta1_sd, e, f) -
-                          log_beta_pdf(eta1 / eta1_sd, e, f);
+  double log_prior_eta1 = log_beta_pdf(eta1_new / eta1_sd, e_eta, f_eta) -
+                          log_beta_pdf(eta1 / eta1_sd, e_eta, f_eta);
 
   // Log MH ratio = log_target + log_aux + log_norm + log_prop
   double log_target_eta1 = (eta1_new - eta1) * B_R1 + log_prior_eta1;
@@ -259,10 +260,9 @@ static void moller_update_eta(const arma::Mat<uint8_t> &Z, double mu,
   double log_MH_eta1 =
       log_target_eta1 + log_aux_eta1 + log_norm_eta1 + log_prop_ratio_eta1;
 
-  if (std::log(R::runif(0.0, 1.0)) < log_MH_eta1)
+  if (bvs_dadj::safe_mh_accept(log_MH_eta1))
     eta1 = eta1_new;
 }
-
 
 } // anonymous namespace
 // =============================================================================
@@ -273,14 +273,11 @@ static void moller_update_eta(const arma::Mat<uint8_t> &Z, double mu,
 // [[Rcpp::export]]
 Rcpp::List BayesLogit_SingleNet_GGM(
     const arma::mat &X, const arma::vec &y, const arma::mat &S_ggm,
-    double n_ggm,
-    int niter, int burnin,
-    double mu, double nu0, double sigmasq0, double alpha0, double beta0,
-    double h, double e, double f,
+    double n_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0,
+    double alpha0, double beta0, double h, double e_eta, double f_eta,
     double v0_ggm, double v1_ggm, double pii_ggm, double lambda_ggm,
     double eta1_sd, double mu_tilde, double eta1_tilde, unsigned int T_max,
-    int proposal_type,
-    int thin = 1,
+    int proposal_type, int thin = 1, int n_thin_gb = 3,
     Rcpp::Nullable<Rcpp::NumericVector> beta_in = R_NilValue,
     Rcpp::Nullable<Rcpp::IntegerVector> gamma_in = R_NilValue,
     double alpha_in = 0.0) {
@@ -292,6 +289,8 @@ Rcpp::List BayesLogit_SingleNet_GGM(
     Rcpp::stop("GGM S matrix dim mismatch");
   if (thin < 1)
     thin = 1;
+  if (n_thin_gb < 1)
+    n_thin_gb = 1;
 
   // 1. INITIALIZATION
   arma::vec beta(p, arma::fill::zeros);
@@ -351,6 +350,7 @@ Rcpp::List BayesLogit_SingleNet_GGM(
 
   // Sparse Z storage
   Rcpp::List Z_list(n_save);
+  arma::mat Z_pip(p, p, arma::fill::zeros);
 
   // 2. MCMC LOOP
   const int total_iter = niter + burnin;
@@ -454,73 +454,80 @@ Rcpp::List BayesLogit_SingleNet_GGM(
     // STEP B: Update Logistic Parameters
     // ---------------------------------------------------------
 
-    // 1. Gamma (Variable Selection) — single-network Ising prior
-    for (arma::uword kk = 0; kk < 5; ++kk) {
-      arma::uword j =
-          static_cast<arma::uword>(std::floor(R::runif(0.0, (double)p)));
-      if (j >= p)
-        j = p - 1;
+    // 1+2. Gamma + Beta with inner thinning (n_thin_gb rounds)
+    for (int thin_gb = 0; thin_gb < n_thin_gb; ++thin_gb) {
 
-      int g_curr = gamma(j);
-      int g_prop = 1 - g_curr;
-      double b_curr = beta(j);
-      double b_prop = (g_prop == 1) ? R::rnorm(beta0, std::sqrt(sigmasq)) : 0.0;
+      // 1. Gamma (Variable Selection) — single-network Ising prior
+      for (arma::uword kk = 0; kk < 5; ++kk) {
+        arma::uword j =
+            static_cast<arma::uword>(std::floor(R::runif(0.0, (double)p)));
+        if (j >= p)
+          j = p - 1;
 
-      // OPT: reuse pre-allocated z_prop
-      z_prop = z + (b_prop - b_curr) * X.col(j);
-      double ll_prop = calc_loglik(y, z_prop, alpha);
+        int g_curr = gamma(j);
+        int g_prop = 1 - g_curr;
+        double b_curr = beta(j);
+        double b_prop =
+            (g_prop == 1) ? R::rnorm(beta0, std::sqrt(sigmasq)) : 0.0;
 
-      double diff = static_cast<double>(g_prop - g_curr);
-      // Single-network: only GGM-estimated neighbors via Z_ggm directly
-      double neigh_dyn = 0.0;
-      for (arma::uword i = 0; i < p; ++i) {
-        if (i == j)
-          continue;
-        if (Z_ggm(i, j) == 1)
-          neigh_dyn += gamma(i);
+        // OPT: reuse pre-allocated z_prop
+        z_prop = z + (b_prop - b_curr) * X.col(j);
+        double ll_prop = calc_loglik(y, z_prop, alpha);
+
+        double diff = static_cast<double>(g_prop - g_curr);
+        // Single-network: only GGM-estimated neighbors via Z_ggm directly
+        double neigh_dyn = 0.0;
+        for (arma::uword i = 0; i < p; ++i) {
+          if (i == j)
+            continue;
+          if (Z_ggm(i, j) == 1)
+            neigh_dyn += gamma(i);
+        }
+
+        double ising_diff = diff * (mu + eta1 * neigh_dyn);
+        double log_ratio = (ll_prop - loglik) + ising_diff;
+
+        if (bvs_dadj::safe_mh_accept(log_ratio)) {
+          gamma(j) = g_prop;
+          beta(j) = b_prop;
+          z = z_prop;
+          loglik = ll_prop;
+        }
       }
 
-      double ising_diff = diff * (mu + eta1 * neigh_dyn);
-      double log_ratio = (ll_prop - loglik) + ising_diff;
-
-      if (std::log(R::runif(0, 1)) < log_ratio) {
-        gamma(j) = g_prop;
-        beta(j) = b_prop;
-        z = z_prop;
-        loglik = ll_prop;
+      // OPT: Build active indices manually (avoids arma::find heap allocation)
+      active_idx.clear();
+      for (arma::uword j = 0; j < p; ++j) {
+        if (gamma(j) == 1)
+          active_idx.push_back(j);
       }
-    }
 
-    // OPT: Build active indices manually (avoids arma::find heap allocation)
-    active_idx.clear();
-    for (arma::uword j = 0; j < p; ++j) {
-      if (gamma(j) == 1)
-        active_idx.push_back(j);
-    }
-
-    // 2. Beta (Metropolis updates for active variables)
-    for (arma::uword k = 0; k < active_idx.size(); ++k) {
-      arma::uword j = active_idx[k];
-      double b_prop = R::rnorm(beta(j), std::sqrt(sigmasq) * 0.1);
-      // OPT: reuse pre-allocated z_prop
-      z_prop = z + (b_prop - beta(j)) * X.col(j);
-      double ll_prop = calc_loglik(y, z_prop, alpha);
-      double pr_curr = -0.5 * std::pow(beta(j) - beta0, 2) / sigmasq;
-      double pr_prop = -0.5 * std::pow(b_prop - beta0, 2) / sigmasq;
-      if (std::log(R::runif(0, 1)) < (ll_prop - loglik) + (pr_prop - pr_curr)) {
-        beta(j) = b_prop;
-        z = z_prop;
-        loglik = ll_prop;
+      // 2. Beta (Metropolis updates for active variables)
+      for (arma::uword k = 0; k < active_idx.size(); ++k) {
+        arma::uword j = active_idx[k];
+        double b_prop = R::rnorm(beta(j), std::sqrt(sigmasq) * 0.1);
+        // OPT: reuse pre-allocated z_prop
+        z_prop = z + (b_prop - beta(j)) * X.col(j);
+        double ll_prop = calc_loglik(y, z_prop, alpha);
+        double pr_curr = -0.5 * std::pow(beta(j) - beta0, 2) / sigmasq;
+        double pr_prop = -0.5 * std::pow(b_prop - beta0, 2) / sigmasq;
+        if (bvs_dadj::safe_mh_accept((ll_prop - loglik) +
+                                      (pr_prop - pr_curr))) {
+          beta(j) = b_prop;
+          z = z_prop;
+          loglik = ll_prop;
+        }
       }
-    }
+
+    } // end inner thinning for gamma + beta
 
     // 3. Alpha (Metropolis update)
     double a_prop = R::rnorm(alpha, std::sqrt(h * sigmasq));
     double ll_a_prop = calc_loglik(y, z, a_prop);
     double pr_a_curr = -0.5 * std::pow(alpha - alpha0, 2) / (h * sigmasq);
     double pr_a_prop = -0.5 * std::pow(a_prop - alpha0, 2) / (h * sigmasq);
-    if (std::log(R::runif(0, 1)) <
-        (ll_a_prop - loglik) + (pr_a_prop - pr_a_curr)) {
+    if (bvs_dadj::safe_mh_accept((ll_a_prop - loglik) +
+                                   (pr_a_prop - pr_a_curr))) {
       alpha = a_prop;
       loglik = ll_a_prop;
     }
@@ -558,13 +565,13 @@ Rcpp::List BayesLogit_SingleNet_GGM(
                           (lp_beta_prop - lp_beta_curr) +
                           (lp_alpha_prop - lp_alpha_curr) +
                           (std::log(sig_prop) - std::log(sigmasq));
-      if (std::log(R::runif(0, 1)) < log_mh_sig)
+      if (bvs_dadj::safe_mh_accept(log_mh_sig))
         sigmasq = sig_prop;
     }
 
     // 5. Update eta1 via Moller et al. (2006) — passes Z_ggm directly
-    moller_update_eta(Z_ggm, mu, eta1, eta1_sd, mu_tilde, eta1_tilde, gamma, e,
-                      f, T_max, proposal_type);
+    moller_update_eta(Z_ggm, mu, eta1, eta1_sd, mu_tilde, eta1_tilde, gamma,
+                      e_eta, f_eta, T_max, proposal_type);
 
     // ---------------------------------------------------------
     // STORE SAMPLES (with thinning)
@@ -605,8 +612,16 @@ Rcpp::List BayesLogit_SingleNet_GGM(
     }
   }
 
+  // Normalize Z_pip to posterior inclusion probabilities
+  double n_post = (double)(total_iter - burnin);
+  if (n_post > 0)
+    Z_pip /= n_post;
+  // Symmetrize
+  Z_pip = Z_pip + Z_pip.t();
+
   return Rcpp::List::create(
       Rcpp::Named("beta") = beta_out, Rcpp::Named("gamma") = gamma_out,
       Rcpp::Named("eta1") = eta1_out, Rcpp::Named("alpha") = alpha_out,
-      Rcpp::Named("sigmasq") = sigmasq_out, Rcpp::Named("Z_list") = Z_list);
+      Rcpp::Named("sigmasq") = sigmasq_out, Rcpp::Named("Z_list") = Z_list,
+      Rcpp::Named("Z_pip") = Z_pip);
 }

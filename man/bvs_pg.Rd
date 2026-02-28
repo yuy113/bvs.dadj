@@ -11,7 +11,6 @@ bvs_pg(
   adj_fixed = NULL,
   adj_fixed2 = NULL,
   sparse = FALSE,
-  ultra_sparse = FALSE,
   S_ggm = NULL,
   store_beta = FALSE,
   store_gamma = FALSE,
@@ -28,7 +27,6 @@ bvs_pg(
   alpha0 = 0,
   beta0 = 0,
   n_mh_gamma = 3L,
-  eta_sd = 0.5,
   eta1_sd = 0.5,
   eta2_sd = 0.5,
   mu_tilde = -4,
@@ -81,9 +79,6 @@ One of:
 (default \code{FALSE}).  Applicable for \code{adj_type = "ggm"} or
 \code{"ggm_fixed"}.}
 
-\item{ultra_sparse}{Logical; when \code{TRUE} with \code{sparse = TRUE},
-route to ultra-sparse sparse-matrix backends for high-dimensional runs.}
-
 \item{S_ggm}{Optional sparse GGM scatter matrix. For ultra-sparse mode,
 supply this explicitly for very large \code{p}.}
 
@@ -119,11 +114,9 @@ selection: \code{"ebic"} (default) or \code{"ric"}.}
 \item{beta0}{Prior mean for coefficients (default 0).}
 
 \item{n_mh_gamma}{Number of gamma MH updates per MCMC iteration
-(default 3).}
+(default 3; used by GGM/sparse backends).}
 
-\item{eta_sd}{Upper bound for eta (single-eta models, default 0.5).}
-
-\item{eta1_sd}{Upper bound for eta1 (dual-eta models, default 0.5).}
+\item{eta1_sd}{Upper bound for eta1 (single-eta models or dual models, default 0.5).}
 
 \item{eta2_sd}{Upper bound for eta2 (dual-eta models, default 0.5).}
 
@@ -162,12 +155,13 @@ normal (default 1).}
 An object of class \code{"bvs"}, a named list with:
   \describe{
     \item{beta}{Matrix of posterior beta samples (niter x p).}
-    \item{gamma}{Matrix of posterior gamma samples (niter x p).}
+    \item{gamma}{Posterior gamma samples (dense matrix or sparse list,
+      depending on backend/storage options).}
     \item{alpha}{Vector of posterior alpha (intercept) samples.}
     \item{sigmasq}{Vector of posterior sigma^2 samples.}
-    \item{eta_dyn}{Vector of eta1 (dynamic GGM coupling) samples
+    \item{eta1}{Vector of eta1 (dynamic or single-graph coupling) samples
       (if applicable).}
-    \item{eta_fix}{Vector of eta2 (fixed coupling) samples
+    \item{eta2}{Vector of eta2 (fixed coupling) samples
       (if applicable).}
     \item{Z_list}{List of GGM adjacency snapshots (if applicable).}
     \item{call}{The matched call.}
@@ -190,20 +184,27 @@ alpha with exact Gibbs sampling steps, improving mixing and convergence.
 \examples{
 \dontrun{
 set.seed(42)
-n <- 200; p <- 50
+n <- 200
+p <- 50
 X <- matrix(rnorm(n * p), n, p)
 beta_true <- c(rep(1, 5), rep(0, p - 5))
 y <- rbinom(n, 1, plogis(X \%*\% beta_true))
 
 # PG with glasso adjacency (EBIC selection)
-fit <- bvs_pg(X, y, adj_type = "glasso", glasso_criterion = "ebic",
-              niter = 5000)
+fit <- bvs_pg(X, y,
+  adj_type = "glasso", glasso_criterion = "ebic",
+  niter = 5000
+)
 summary(fit)
 
 # PG with dual network: glasso-estimated + external fixed adjacency
-R_fix <- diag(0, p); R_fix[1:5, 1:5] <- 1; diag(R_fix) <- 0
-fit1b <- bvs_pg(X, y, adj_type = "glasso_fixed", adj_fixed = R_fix,
-                glasso_criterion = "ebic", niter = 5000)
+R_fix <- diag(0, p)
+R_fix[1:5, 1:5] <- 1
+diag(R_fix) <- 0
+fit1b <- bvs_pg(X, y,
+  adj_type = "glasso_fixed", adj_fixed = R_fix,
+  glasso_criterion = "ebic", niter = 5000
+)
 
 # PG with sparse GGM adjacency
 fit2 <- bvs_pg(X, y, adj_type = "ggm", sparse = TRUE, niter = 5000)

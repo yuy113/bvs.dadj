@@ -2,26 +2,44 @@
 % Please edit documentation in R/bvs_summary.R
 \name{plot.bvs}
 \alias{plot.bvs}
-\title{Plot BVS Posterior Inclusion Probabilities}
+\title{Plot BVS Results (PIP, Trace, ACF)}
 \usage{
-\method{plot}{bvs}(x, pip_threshold = 0.5, top_n = NULL, ...)
+\method{plot}{bvs}(
+  x,
+  type = c("pip", "trace", "acf", "all"),
+  pip_threshold = 0.5,
+  top_n = 5,
+  vars = NULL,
+  ...
+)
 }
 \arguments{
 \item{x}{An object of class \code{"bvs"}.}
 
-\item{pip_threshold}{Threshold line (default 0.5).}
+\item{type}{Type of plot: \code{"pip"} (bar plot of PIPs),
+\code{"trace"} (trace plots of coefficients),
+\code{"acf"} (autocorrelation of coefficients),
+or \code{"all"} (all of the above).}
 
-\item{top_n}{Show only top N variables by PIP (default: all).}
+\item{pip_threshold}{Threshold line for PIP plot (default 0.5).}
 
-\item{...}{Additional graphical arguments.}
+\item{top_n}{Number of top variables (by PIP) to show in trace/ACF plots (default 5).}
+
+\item{vars}{Optional vector of indices or names of specific variables to plot.
+Overrides \code{top_n} if provided.}
+
+\item{...}{Additional graphical arguments passed to plotting functions.}
 }
 \description{
-Creates a barplot of posterior inclusion probabilities with a threshold line.
+Provides plots for Posterior Inclusion Probabilities (PIP),
+trace plots of coefficients, and autocorrelation functions (ACF)
+for MCMC convergence assessment.
 }
 \examples{
 \dontrun{
 fit <- bvs_pg(X, y, adj_type = "fixed", adj_fixed = R, niter = 5000)
-plot(fit)
+plot(fit, type = "pip")
+plot(fit, type = "trace", top_n = 4)
 }
 
 }

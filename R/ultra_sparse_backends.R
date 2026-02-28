@@ -4,10 +4,26 @@
   if (inherits(M, "dgCMatrix")) {
     return(M)
   }
-  if (inherits(M, "Matrix") && !inherits(M, "generalMatrix")) {
-    M <- as(M, "generalMatrix")
+  if (!inherits(M, "Matrix")) {
+    M <- Matrix::Matrix(M, sparse = TRUE)
   }
-  as(as(M, "CsparseMatrix"), "dgCMatrix")
+  # Avoid deprecated direct coercions (e.g., dsCMatrix -> dgCMatrix) by:
+  # 1) forcing a general sparse form; 2) rebuilding a numeric dgC matrix.
+  M <- methods::as(M, "generalMatrix")
+  M <- methods::as(M, "CsparseMatrix")
+  if (!inherits(M, "dgCMatrix")) {
+    ii <- M@i + 1L
+    xx <- if ("x" %in% slotNames(M)) as.numeric(M@x) else rep(1, length(ii))
+    M <- Matrix::sparseMatrix(
+      i = ii,
+      p = M@p,
+      x = xx,
+      dims = dim(M),
+      index1 = TRUE,
+      repr = "C"
+    )
+  }
+  M
 }
 
 .init_ultra_sparse_state <- function(y, p, beta_init, gamma_init, alpha_init) {
@@ -54,44 +70,15 @@
 
   S_diag <- as.numeric(Matrix::diag(S_ggm))
 
-  S_i <- S_ggm@i
-  S_p <- S_ggm@p
-  S_x <- S_ggm@x
-
-  off_i <- integer(length(S_i))
-  off_x <- numeric(length(S_x))
-  off_p <- integer(p + 1L)
-  off_p[1] <- 0L
-  ptr <- 0L
-
-  for (col in seq_len(p)) {
-    start <- S_p[col] + 1L
-    end <- S_p[col + 1L]
-    n_in_col <- 0L
-    if (start <= end) {
-      idx <- start:end
-      rows <- S_i[idx]
-      keep <- rows != (col - 1L)
-      n_in_col <- sum(keep)
-      if (n_in_col > 0L) {
-        pos <- (ptr + 1L):(ptr + n_in_col)
-        off_i[pos] <- rows[keep]
-        off_x[pos] <- S_x[idx][keep]
-        ptr <- ptr + n_in_col
-      }
-    }
-    off_p[col + 1L] <- ptr
-  }
-
-  if (ptr < length(off_i)) {
-    off_i <- off_i[seq_len(ptr)]
-    off_x <- off_x[seq_len(ptr)]
-  }
+  # Fast symmetric diagonal drop natively leveraging dgCMatrix internals
+  S_off <- S_ggm
+  Matrix::diag(S_off) <- 0
+  S_off <- Matrix::drop0(S_off)
 
   list(
-    S_i = as.integer(off_i),
-    S_p = as.integer(off_p),
-    S_x = as.numeric(off_x),
+    S_i = as.integer(S_off@i),
+    S_p = as.integer(S_off@p),
+    S_x = as.numeric(S_off@x),
     S_diag = as.numeric(S_diag),
     p = as.integer(p)
   )
@@ -161,322 +148,11 @@
 
   pip_counts <- numeric(p)
   for (s in seq_along(result$gamma)) {
-    idx <- result$gamma[[s]]
-    if (length(idx) > 0L) {
-      pip_counts[idx + 1L] <- pip_counts[idx + 1L] + 1
+    idx1 <- .normalize_sparse_idx(result$gamma[[s]], p)
+    if (length(idx1) > 0L) {
+      pip_counts[idx1] <- pip_counts[idx1] + 1
     }
   }
   result$gamma_pip <- pip_counts / n_save
-  result
-}
-
-#' Ultra-sparse MH BVS with single sparse GGM adjacency
-#' @export
-bvs_mh_singlenet_ultra_sparse <- function(
-    X, y, S_ggm = NULL,
-    niter = 60000L, burnin = 10000L, thin = 1L,
-    nu0 = 2, sigmasq0 = 1.5, h = 1.5,
-    mu = -log(1 / 0.3 - 1), alpha0 = 0, beta0 = 0,
-    n_mh_gamma = 3L,
-    eta_sd = 0.5, mu_tilde = -4, eta1_tilde = 0.075,
-    e_eta = 2, f_eta = 1,
-    Tmax = 64L, proposal_type = 1L,
-    v0_ggm = 0.015^2, v1_ggm = (50^2) * (0.015^2), pii_ggm = NULL,
-    beta_init = NULL, gamma_init = NULL, alpha_init = NULL,
-    store_beta = FALSE, store_gamma = FALSE,
-    store_Z_list = FALSE, store_Z_pip = TRUE,
-    seed = NULL) {
-
-  if (!is.null(seed)) {
-    set.seed(seed)
-  }
-
-  X <- .as_dgC(X)
-  y <- as.numeric(y)
-
-  n <- nrow(X)
-  p <- ncol(X)
-  if (length(y) != n) {
-    stop("length(y) must equal nrow(X).")
-  }
-  if (is.null(pii_ggm)) {
-    pii_ggm <- 30 / max(1, (p - 1))
-  }
-
-  if (is.null(beta_init) || is.null(gamma_init) || is.null(alpha_init)) {
-    init <- .init_ultra_sparse_state(y, p, beta_init, gamma_init, alpha_init)
-    beta_init <- init$beta_init
-    gamma_init <- init$gamma_init
-    alpha_init <- init$alpha_init
-  }
-
-  sp <- .prepare_sparse_S_triplet(X, S_ggm = S_ggm)
-
-  result <- BayesLogit_SingleNet_SparseGGM_UltraSparse(
-    X = X, y = y,
-    S_i = sp$S_i, S_p_csc = sp$S_p, S_x = sp$S_x, S_diag = sp$S_diag,
-    p_ggm = sp$p,
-    niter = as.integer(niter), burnin = as.integer(burnin),
-    mu = as.double(mu), nu0 = as.double(nu0), sigmasq0 = as.double(sigmasq0),
-    alpha0 = as.double(alpha0), beta0 = as.double(beta0),
-    h = as.double(h), e = as.double(e_eta), f = as.double(f_eta),
-    v0_ggm = as.double(v0_ggm), v1_ggm = as.double(v1_ggm),
-    pii_ggm = as.double(pii_ggm),
-    eta_sd = as.double(eta_sd), mu_tilde = as.double(mu_tilde),
-    eta1_tilde = as.double(eta1_tilde),
-    T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
-    n_mh_gamma = as.integer(n_mh_gamma), thin = as.integer(thin),
-    beta_in = as.numeric(beta_init),
-    gamma_in = as.integer(gamma_init),
-    alpha_in = as.double(alpha_init),
-    store_beta = isTRUE(store_beta), store_gamma = isTRUE(store_gamma),
-    store_Z_list = isTRUE(store_Z_list), store_Z_pip = isTRUE(store_Z_pip)
-  )
-
-  n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
-  result <- .reconstruct_sparse_pip(result, p, store_Z_pip)
-  result <- .reconstruct_gamma_pip(result, p, n_save, store_gamma)
-  result$n_save <- n_save
-  result$sampler <- "mh"
-  result$adj_type <- "ggm"
-  class(result) <- c("bvs_ultra_sparse", "bvs")
-  result
-}
-
-#' Ultra-sparse MH BVS with dual network (sparse GGM + sparse fixed adjacency)
-#' @export
-bvs_mh_dualnet_ultra_sparse <- function(
-    X, y, adj_fixed, S_ggm = NULL,
-    niter = 60000L, burnin = 10000L, thin = 1L,
-    nu0 = 2, sigmasq0 = 1.5, h = 1.5,
-    mu = -log(1 / 0.3 - 1), alpha0 = 0, beta0 = 0,
-    n_mh_gamma = 3L,
-    eta1_sd = 0.5, eta2_sd = 0.5,
-    mu_tilde = -4, eta1_tilde = 0.075, eta2_tilde = 0.065,
-    e_eta = 2, f_eta = 1,
-    Tmax = 64L, proposal_type = 1L,
-    v0_ggm = 0.015^2, v1_ggm = (50^2) * (0.015^2), pii_ggm = NULL,
-    beta_init = NULL, gamma_init = NULL, alpha_init = NULL,
-    store_beta = FALSE, store_gamma = FALSE,
-    store_Z_list = FALSE, store_Z_pip = TRUE,
-    seed = NULL) {
-
-  if (!is.null(seed)) {
-    set.seed(seed)
-  }
-
-  X <- .as_dgC(X)
-  y <- as.numeric(y)
-
-  n <- nrow(X)
-  p <- ncol(X)
-  if (length(y) != n) {
-    stop("length(y) must equal nrow(X).")
-  }
-  if (is.null(pii_ggm)) {
-    pii_ggm <- 30 / max(1, (p - 1))
-  }
-
-  fixed_sp <- .prepare_sparse_adj_triplet(adj_fixed)
-  if (fixed_sp$p != p) {
-    stop("adj_fixed dimension must match ncol(X).")
-  }
-
-  if (is.null(beta_init) || is.null(gamma_init) || is.null(alpha_init)) {
-    init <- .init_ultra_sparse_state(y, p, beta_init, gamma_init, alpha_init)
-    beta_init <- init$beta_init
-    gamma_init <- init$gamma_init
-    alpha_init <- init$alpha_init
-  }
-
-  sp <- .prepare_sparse_S_triplet(X, S_ggm = S_ggm)
-
-  result <- BayesLogit_DualNet_SparseGGM_UltraSparse(
-    X = X, y = y,
-    S_i = sp$S_i, S_p_csc = sp$S_p, S_x = sp$S_x, S_diag = sp$S_diag,
-    R_fix_i = fixed_sp$R_i, R_fix_p_csc = fixed_sp$R_p,
-    p_ggm = sp$p,
-    niter = as.integer(niter), burnin = as.integer(burnin),
-    mu = as.double(mu), nu0 = as.double(nu0), sigmasq0 = as.double(sigmasq0),
-    alpha0 = as.double(alpha0), beta0 = as.double(beta0),
-    h = as.double(h), e = as.double(e_eta), f = as.double(f_eta),
-    v0_ggm = as.double(v0_ggm), v1_ggm = as.double(v1_ggm),
-    pii_ggm = as.double(pii_ggm),
-    eta1_sd = as.double(eta1_sd), eta2_sd = as.double(eta2_sd),
-    mu_tilde = as.double(mu_tilde), eta1_tilde = as.double(eta1_tilde),
-    eta2_tilde = as.double(eta2_tilde),
-    T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
-    n_mh_gamma = as.integer(n_mh_gamma), thin = as.integer(thin),
-    beta_in = as.numeric(beta_init),
-    gamma_in = as.integer(gamma_init),
-    alpha_in = as.double(alpha_init),
-    store_beta = isTRUE(store_beta), store_gamma = isTRUE(store_gamma),
-    store_Z_list = isTRUE(store_Z_list), store_Z_pip = isTRUE(store_Z_pip)
-  )
-
-  n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
-  result <- .reconstruct_sparse_pip(result, p, store_Z_pip)
-  result <- .reconstruct_gamma_pip(result, p, n_save, store_gamma)
-  result$n_save <- n_save
-  result$sampler <- "mh"
-  result$adj_type <- "ggm_fixed"
-  class(result) <- c("bvs_ultra_sparse", "bvs")
-  result
-}
-
-#' Ultra-sparse PG BVS with single sparse GGM adjacency
-#' @export
-bvs_pg_singlenet_ultra_sparse <- function(
-    X, y, S_ggm = NULL,
-    niter = 60000L, burnin = 10000L, thin = 1L,
-    nu0 = 2, sigmasq0 = 1.5, h = 1.5,
-    mu = -log(1 / 0.3 - 1), alpha0 = 0, beta0 = 0,
-    n_mh_gamma = 3L,
-    eta_sd = 0.5,
-    mu_tilde = -4, eta1_tilde = 0.075,
-    e_eta = 2, f_eta = 1,
-    Tmax = 64L, proposal_type = 1L,
-    v0_ggm = 0.015^2, v1_ggm = (50^2) * (0.015^2), pii_ggm = NULL,
-    beta_init = NULL, gamma_init = NULL, alpha_init = NULL,
-    store_beta = FALSE, store_gamma = FALSE,
-    store_Z_list = FALSE, store_Z_pip = TRUE,
-    seed = NULL) {
-
-  if (!is.null(seed)) {
-    set.seed(seed)
-  }
-
-  X <- .as_dgC(X)
-  y <- as.numeric(y)
-
-  n <- nrow(X)
-  p <- ncol(X)
-  if (length(y) != n) {
-    stop("length(y) must equal nrow(X).")
-  }
-  if (is.null(pii_ggm)) {
-    pii_ggm <- 30 / max(1, (p - 1))
-  }
-
-  if (is.null(beta_init) || is.null(gamma_init) || is.null(alpha_init)) {
-    init <- .init_ultra_sparse_state(y, p, beta_init, gamma_init, alpha_init)
-    beta_init <- init$beta_init
-    gamma_init <- init$gamma_init
-    alpha_init <- init$alpha_init
-  }
-
-  sp <- .prepare_sparse_S_triplet(X, S_ggm = S_ggm)
-
-  result <- BayesLogit_PG_SingleNet_SparseGGM_UltraSparse(
-    X = X, y = y,
-    S_i = sp$S_i, S_p_csc = sp$S_p, S_x = sp$S_x, S_diag = sp$S_diag,
-    p_ggm = sp$p,
-    niter = as.integer(niter), burnin = as.integer(burnin),
-    mu = as.double(mu), nu0 = as.double(nu0), sigmasq0 = as.double(sigmasq0),
-    alpha0 = as.double(alpha0), beta0 = as.double(beta0),
-    h = as.double(h), n_mh_gamma = as.integer(n_mh_gamma),
-    v0_ggm = as.double(v0_ggm), v1_ggm = as.double(v1_ggm),
-    pii_ggm = as.double(pii_ggm),
-    eta_sd = as.double(eta_sd), mu_tilde = as.double(mu_tilde),
-    eta1_tilde = as.double(eta1_tilde),
-    e_eta = as.double(e_eta), f_eta = as.double(f_eta),
-    T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
-    thin = as.integer(thin),
-    beta_in = as.numeric(beta_init),
-    gamma_in = as.integer(gamma_init),
-    alpha_in = as.double(alpha_init),
-    store_beta = isTRUE(store_beta), store_gamma = isTRUE(store_gamma),
-    store_Z_list = isTRUE(store_Z_list), store_Z_pip = isTRUE(store_Z_pip)
-  )
-
-  n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
-  result <- .reconstruct_sparse_pip(result, p, store_Z_pip)
-  result <- .reconstruct_gamma_pip(result, p, n_save, store_gamma)
-  result$n_save <- n_save
-  result$sampler <- "pg"
-  result$adj_type <- "ggm"
-  class(result) <- c("bvs_ultra_sparse", "bvs")
-  result
-}
-
-#' Ultra-sparse PG BVS with dual network (sparse GGM + sparse fixed adjacency)
-#' @export
-bvs_pg_dualnet_ultra_sparse <- function(
-    X, y, adj_fixed, S_ggm = NULL,
-    niter = 60000L, burnin = 10000L, thin = 1L,
-    nu0 = 2, sigmasq0 = 1.5, h = 1.5,
-    mu = -log(1 / 0.3 - 1), alpha0 = 0, beta0 = 0,
-    n_mh_gamma = 3L,
-    eta1_sd = 0.5, eta2_sd = 0.5,
-    mu_tilde = -4, eta1_tilde = 0.075, eta2_tilde = 0.065,
-    e_eta = 2, f_eta = 1,
-    Tmax = 64L, proposal_type = 1L,
-    v0_ggm = 0.015^2, v1_ggm = (50^2) * (0.015^2), pii_ggm = NULL,
-    beta_init = NULL, gamma_init = NULL, alpha_init = NULL,
-    store_beta = FALSE, store_gamma = FALSE,
-    store_Z_list = FALSE, store_Z_pip = TRUE,
-    seed = NULL) {
-
-  if (!is.null(seed)) {
-    set.seed(seed)
-  }
-
-  X <- .as_dgC(X)
-  y <- as.numeric(y)
-
-  n <- nrow(X)
-  p <- ncol(X)
-  if (length(y) != n) {
-    stop("length(y) must equal nrow(X).")
-  }
-  if (is.null(pii_ggm)) {
-    pii_ggm <- 30 / max(1, (p - 1))
-  }
-
-  fixed_sp <- .prepare_sparse_adj_triplet(adj_fixed)
-  if (fixed_sp$p != p) {
-    stop("adj_fixed dimension must match ncol(X).")
-  }
-
-  if (is.null(beta_init) || is.null(gamma_init) || is.null(alpha_init)) {
-    init <- .init_ultra_sparse_state(y, p, beta_init, gamma_init, alpha_init)
-    beta_init <- init$beta_init
-    gamma_init <- init$gamma_init
-    alpha_init <- init$alpha_init
-  }
-
-  sp <- .prepare_sparse_S_triplet(X, S_ggm = S_ggm)
-
-  result <- BayesLogit_PG_DualNet_SparseGGM_UltraSparse(
-    X = X, y = y,
-    S_i = sp$S_i, S_p_csc = sp$S_p, S_x = sp$S_x, S_diag = sp$S_diag,
-    R_fix_i = fixed_sp$R_i, R_fix_p_csc = fixed_sp$R_p,
-    p_ggm = sp$p,
-    niter = as.integer(niter), burnin = as.integer(burnin),
-    mu = as.double(mu), nu0 = as.double(nu0), sigmasq0 = as.double(sigmasq0),
-    alpha0 = as.double(alpha0), beta0 = as.double(beta0),
-    h = as.double(h), n_mh_gamma = as.integer(n_mh_gamma),
-    v0_ggm = as.double(v0_ggm), v1_ggm = as.double(v1_ggm),
-    pii_ggm = as.double(pii_ggm),
-    eta1_sd = as.double(eta1_sd), eta2_sd = as.double(eta2_sd),
-    mu_tilde = as.double(mu_tilde), eta1_tilde = as.double(eta1_tilde),
-    eta2_tilde = as.double(eta2_tilde),
-    e_eta = as.double(e_eta), f_eta = as.double(f_eta),
-    T_max = as.integer(Tmax), proposal_type = as.integer(proposal_type),
-    thin = as.integer(thin),
-    beta_in = as.numeric(beta_init),
-    gamma_in = as.integer(gamma_init),
-    alpha_in = as.double(alpha_init),
-    store_beta = isTRUE(store_beta), store_gamma = isTRUE(store_gamma),
-    store_Z_list = isTRUE(store_Z_list), store_Z_pip = isTRUE(store_Z_pip)
-  )
-
-  n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
-  result <- .reconstruct_sparse_pip(result, p, store_Z_pip)
-  result <- .reconstruct_gamma_pip(result, p, n_save, store_gamma)
-  result$n_save <- n_save
-  result$sampler <- "pg"
-  result$adj_type <- "ggm_fixed"
-  class(result) <- c("bvs_ultra_sparse", "bvs")
   result
 }

@@ -4,13 +4,17 @@
 \alias{summary.bvs}
 \title{Summarize BVS Results}
 \usage{
-\method{summary}{bvs}(object, pip_threshold = 0.5, ...)
+\method{summary}{bvs}(object, pip_threshold = 0.5, cred_level = 0.95, hpd_level = 0.95, ...)
 }
 \arguments{
 \item{object}{An object of class \code{"bvs"}.}
 
 \item{pip_threshold}{Threshold on PIP for declaring a variable selected
 (default 0.5).}
+
+\item{cred_level}{Probability level for quantile-based credible intervals (default 0.95).}
+
+\item{hpd_level}{Probability level for HPD intervals (default 0.95).}
 
 \item{...}{Additional arguments (ignored).}
 }
@@ -19,22 +23,26 @@ A list with:
   \describe{
     \item{pip}{Posterior inclusion probabilities (length p).}
     \item{selected}{Indices of selected variables (PIP > threshold).}
-    \item{beta_mean}{Posterior mean of beta (length p).}
-    \item{beta_lower}{2.5\% quantile of beta (length p).}
-    \item{beta_upper}{97.5\% quantile of beta (length p).}
-    \item{alpha_mean}{Posterior mean of alpha.}
+    \item{summary_beta}{Data frame with columns: mean, sd,
+          quantile_lower, quantile_upper, hpd_lower, hpd_upper, ess. (Rows = predictors)}
+    \item{summary_alpha}{Summary vector for intercept (mean, quantiles, HPD, ESS).}
     \item{nselected}{Number of selected variables.}
+    \item{cred_level}{Sampled credible level.}
+    \item{hpd_level}{Sampled HPD level.}
   }
 }
 \description{
 Computes posterior inclusion probabilities (PIP), posterior means,
-and 95\% credible intervals for each predictor.
+credible intervals (quantile-based), and Highest Posterior Density (HPD)
+intervals (via \code{coda}) for probability of inclusion and coefficients.
+Also provides MCMC convergence diagnostics (Effective Sample Size).
 }
 \examples{
 \dontrun{
 fit <- bvs_pg(X, y, adj_type = "fixed", adj_fixed = R, niter = 5000)
-s <- summary(fit)
-s$selected
+s <- summary(fit, cred_level = 0.90, hpd_level = 0.90)
+head(s$summary_beta)
+plot(fit, type = "trace")
 }
 
 }

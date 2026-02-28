@@ -16,8 +16,8 @@ MCMC tools for Bayesian variable selection in logistic
 
 Authors:
 \itemize{
-  \item Raji Balasubramanian \email{rbalasub@schoolph.umass.edu}
   \item Mahlet Tadesse \email{mgt26@georgetown.edu}
+  \item Raji Balasubramanian \email{rbalasub@schoolph.umass.edu}
 }
 
 }

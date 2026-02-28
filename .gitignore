@@ -44,3 +44,5 @@ fix_comments.py
 
 # Cache
 *_cache/
+/doc/
+/Meta/

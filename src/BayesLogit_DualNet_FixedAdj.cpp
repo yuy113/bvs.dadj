@@ -1,11 +1,11 @@
 // [[Rcpp::depends(RcppArmadillo)]]
+#include "BayesLogit_Numerics.h"
 #include <RcppArmadillo.h>
 #include <algorithm>
 #include <cmath>
 #include <random>
 
 namespace {
-
 
 // =============================================================================
 // SECTION 1: HELPER FUNCTIONS
@@ -52,6 +52,7 @@ static inline double normal_cdf(double x, double mu, double sigma) {
 
 // Log Beta density: log Beta(x | a, b)
 static inline double log_beta_pdf(double x, double a, double b) {
+  x = std::max(1e-12, std::min(1.0 - 1e-12, x));
   return std::lgamma(a + b) - std::lgamma(a) - std::lgamma(b) +
          (a - 1.0) * std::log(x) + (b - 1.0) * std::log(1.0 - x);
 }
@@ -162,13 +163,12 @@ static Rcpp::IntegerVector proppwilson_omega(const Rcpp::IntegerMatrix &R1,
 //
 // Prior: eta_i / eta_i_sd ~ Beta(e, f), so eta_i ~ scaled Beta on (0, eta_i_sd)
 // =============================================================================
-static void moller_update_eta(const Rcpp::IntegerMatrix &R1,
-                              const Rcpp::IntegerMatrix &R2, double mu,
-                              double &eta1, double &eta2, double eta1_sd,
-                              double eta2_sd, double mu_tilde,
-                              double eta1_tilde, double eta2_tilde,
-                              const arma::uvec &gamma, double e, double f,
-                              unsigned int T_max, int proposal_type) {
+static void
+moller_update_eta(const Rcpp::IntegerMatrix &R1, const Rcpp::IntegerMatrix &R2,
+                  double mu, double &eta1, double &eta2, double eta1_sd,
+                  double eta2_sd, double mu_tilde, double eta1_tilde,
+                  double eta2_tilde, const arma::uvec &gamma, double e_eta,
+                  double f_eta, unsigned int T_max, int proposal_type) {
   const unsigned int p = R1.ncol();
 
   // --- Propose new eta1, eta2 ---
@@ -284,10 +284,10 @@ static void moller_update_eta(const Rcpp::IntegerMatrix &R1,
 
   // --- Prior ratio: log Beta(eta_new/eta_sd | e,f) - log Beta(eta/eta_sd |
   // e,f) ---
-  double log_prior_eta1 = log_beta_pdf(eta1_new / eta1_sd, e, f) -
-                          log_beta_pdf(eta1 / eta1_sd, e, f);
-  double log_prior_eta2 = log_beta_pdf(eta2_new / eta2_sd, e, f) -
-                          log_beta_pdf(eta2 / eta2_sd, e, f);
+  double log_prior_eta1 = log_beta_pdf(eta1_new / eta1_sd, e_eta, f_eta) -
+                          log_beta_pdf(eta1 / eta1_sd, e_eta, f_eta);
+  double log_prior_eta2 = log_beta_pdf(eta2_new / eta2_sd, e_eta, f_eta) -
+                          log_beta_pdf(eta2 / eta2_sd, e_eta, f_eta);
 
   // --- MH ratio (Moller et al. 2006) ---
   // Target ratio for eta1: (eta1_new - eta1) * gamma'R1*gamma
@@ -314,14 +314,13 @@ static void moller_update_eta(const Rcpp::IntegerMatrix &R1,
       log_target_eta2 + log_aux_eta2 + log_norm_eta2 + log_prop_ratio_eta2;
 
   // --- Accept/reject ---
-  if (std::log(R::runif(0.0, 1.0)) < log_MH_eta1) {
+  if (bvs_dadj::safe_mh_accept(log_MH_eta1)) {
     eta1 = eta1_new;
   }
-  if (std::log(R::runif(0.0, 1.0)) < log_MH_eta2) {
+  if (bvs_dadj::safe_mh_accept(log_MH_eta2)) {
     eta2 = eta2_new;
   }
 }
-
 
 } // anonymous namespace
 // =============================================================================
@@ -330,15 +329,12 @@ static void moller_update_eta(const Rcpp::IntegerMatrix &R1,
 
 // [[Rcpp::export]]
 Rcpp::List BayesLogit_DualNet_FixedAdj(
-    const arma::mat &X, const arma::vec &y,
-    Rcpp::IntegerMatrix R_dyn_int,
-    Rcpp::IntegerMatrix R_fix_int,
-    int niter, int burnin,
-    double mu, double nu0, double sigmasq0, double alpha0, double beta0,
-    double h, double e, double f,
-    double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde,
-    double eta2_tilde, unsigned int T_max, int proposal_type,
-    int thin = 1,
+    const arma::mat &X, const arma::vec &y, Rcpp::IntegerMatrix R_dyn_int,
+    Rcpp::IntegerMatrix R_fix_int, int niter, int burnin, double mu, double nu0,
+    double sigmasq0, double alpha0, double beta0, double h, double e_eta,
+    double f_eta, double eta1_sd, double eta2_sd, double mu_tilde,
+    double eta1_tilde, double eta2_tilde, unsigned int T_max, int proposal_type,
+    int thin = 1, int n_thin_gb = 3,
     Rcpp::Nullable<Rcpp::NumericVector> beta_in = R_NilValue,
     Rcpp::Nullable<Rcpp::IntegerVector> gamma_in = R_NilValue,
     double alpha_in = 0.0) {
@@ -353,6 +349,8 @@ Rcpp::List BayesLogit_DualNet_FixedAdj(
     Rcpp::stop("R_fix dimensions must match p = %d", p);
   if (thin < 1)
     thin = 1;
+  if (n_thin_gb < 1)
+    n_thin_gb = 1;
 
   // Create arma::mat versions for fast submatrix operations in gamma updates
   arma::mat R_dyn(p, p);
@@ -400,61 +398,67 @@ Rcpp::List BayesLogit_DualNet_FixedAdj(
     }
 
     // ---------------------------------------------------------
-    // STEP A: Gamma (Variable Selection) via MH with dual Ising prior
+    // STEP A+B: Gamma + Beta with inner thinning (n_thin_gb rounds)
     // ---------------------------------------------------------
-    for (arma::uword k = 0; k < 5; ++k) {
-      arma::uword j =
-          static_cast<arma::uword>(std::floor(R::runif(0.0, (double)p)));
-      if (j >= p)
-        j = p - 1;
+    arma::uvec active;
+    for (int thin_gb = 0; thin_gb < n_thin_gb; ++thin_gb) {
 
-      int g_curr = gamma(j);
-      int g_prop = 1 - g_curr;
-      double b_curr = beta(j);
-      double b_prop = (g_prop == 1) ? R::rnorm(beta0, std::sqrt(sigmasq)) : 0.0;
+      // STEP A: Gamma (Variable Selection) via MH with dual Ising prior
+      for (arma::uword k = 0; k < 5; ++k) {
+        arma::uword j =
+            static_cast<arma::uword>(std::floor(R::runif(0.0, (double)p)));
+        if (j >= p)
+          j = p - 1;
 
-      arma::vec z_prop = z + (b_prop - b_curr) * X.col(j);
-      double ll_prop = calc_loglik(y, z_prop, alpha);
+        int g_curr = gamma(j);
+        int g_prop = 1 - g_curr;
+        double b_curr = beta(j);
+        double b_prop =
+            (g_prop == 1) ? R::rnorm(beta0, std::sqrt(sigmasq)) : 0.0;
 
-      double diff = static_cast<double>(g_prop - g_curr);
-      double neigh_dyn = 0.0, neigh_fix = 0.0;
-      for (arma::uword i = 0; i < p; ++i) {
-        if (i == j)
-          continue;
-        if (R_dyn(i, j) != 0.0)
-          neigh_dyn += gamma(i);
-        if (R_fix(i, j) != 0.0)
-          neigh_fix += gamma(i);
+        arma::vec z_prop = z + (b_prop - b_curr) * X.col(j);
+        double ll_prop = calc_loglik(y, z_prop, alpha);
+
+        double diff = static_cast<double>(g_prop - g_curr);
+        double neigh_dyn = 0.0, neigh_fix = 0.0;
+        for (arma::uword i = 0; i < p; ++i) {
+          if (i == j)
+            continue;
+          if (R_dyn(i, j) != 0.0)
+            neigh_dyn += gamma(i);
+          if (R_fix(i, j) != 0.0)
+            neigh_fix += gamma(i);
+        }
+
+        double ising_diff = diff * (mu + eta1 * neigh_dyn + eta2 * neigh_fix);
+        double log_ratio = (ll_prop - loglik) + ising_diff;
+
+        if (bvs_dadj::safe_mh_accept(log_ratio)) {
+          gamma(j) = g_prop;
+          beta(j) = b_prop;
+          z = z_prop;
+          loglik = ll_prop;
+        }
       }
 
-      double ising_diff = diff * (mu + eta1 * neigh_dyn + eta2 * neigh_fix);
-      double log_ratio = (ll_prop - loglik) + ising_diff;
-
-      if (std::log(R::runif(0, 1)) < log_ratio) {
-        gamma(j) = g_prop;
-        beta(j) = b_prop;
-        z = z_prop;
-        loglik = ll_prop;
+      // STEP B: Beta (Metropolis updates for active variables)
+      active = arma::find(gamma == 1);
+      for (arma::uword k = 0; k < active.n_elem; ++k) {
+        arma::uword j = active(k);
+        double b_prop = R::rnorm(beta(j), std::sqrt(sigmasq) * 0.1);
+        arma::vec z_prop = z + (b_prop - beta(j)) * X.col(j);
+        double ll_prop = calc_loglik(y, z_prop, alpha);
+        double pr_curr = -0.5 * std::pow(beta(j) - beta0, 2) / sigmasq;
+        double pr_prop = -0.5 * std::pow(b_prop - beta0, 2) / sigmasq;
+        if (bvs_dadj::safe_mh_accept((ll_prop - loglik) +
+                                      (pr_prop - pr_curr))) {
+          beta(j) = b_prop;
+          z = z_prop;
+          loglik = ll_prop;
+        }
       }
-    }
 
-    // ---------------------------------------------------------
-    // STEP B: Beta (Metropolis updates for active variables)
-    // ---------------------------------------------------------
-    arma::uvec active = arma::find(gamma == 1);
-    for (arma::uword k = 0; k < active.n_elem; ++k) {
-      arma::uword j = active(k);
-      double b_prop = R::rnorm(beta(j), std::sqrt(sigmasq) * 0.1);
-      arma::vec z_prop = z + (b_prop - beta(j)) * X.col(j);
-      double ll_prop = calc_loglik(y, z_prop, alpha);
-      double pr_curr = -0.5 * std::pow(beta(j) - beta0, 2) / sigmasq;
-      double pr_prop = -0.5 * std::pow(b_prop - beta0, 2) / sigmasq;
-      if (std::log(R::runif(0, 1)) < (ll_prop - loglik) + (pr_prop - pr_curr)) {
-        beta(j) = b_prop;
-        z = z_prop;
-        loglik = ll_prop;
-      }
-    }
+    } // end inner thinning for gamma + beta
 
     // ---------------------------------------------------------
     // STEP C: Alpha (Metropolis update)
@@ -463,8 +467,8 @@ Rcpp::List BayesLogit_DualNet_FixedAdj(
     double ll_a_prop = calc_loglik(y, z, a_prop);
     double pr_a_curr = -0.5 * std::pow(alpha - alpha0, 2) / (h * sigmasq);
     double pr_a_prop = -0.5 * std::pow(a_prop - alpha0, 2) / (h * sigmasq);
-    if (std::log(R::runif(0, 1)) <
-        (ll_a_prop - loglik) + (pr_a_prop - pr_a_curr)) {
+    if (bvs_dadj::safe_mh_accept((ll_a_prop - loglik) +
+                                   (pr_a_prop - pr_a_curr))) {
       alpha = a_prop;
       loglik = ll_a_prop;
     }
@@ -504,7 +508,7 @@ Rcpp::List BayesLogit_DualNet_FixedAdj(
                           (lp_beta_prop - lp_beta_curr) +
                           (lp_alpha_prop - lp_alpha_curr) +
                           (std::log(sig_prop) - std::log(sigmasq));
-      if (std::log(R::runif(0, 1)) < log_mh_sig)
+      if (bvs_dadj::safe_mh_accept(log_mh_sig))
         sigmasq = sig_prop;
     }
 
@@ -513,8 +517,8 @@ Rcpp::List BayesLogit_DualNet_FixedAdj(
     //         with Propp-Wilson perfect simulation
     // ---------------------------------------------------------
     moller_update_eta(R_dyn_int, R_fix_int, mu, eta1, eta2, eta1_sd, eta2_sd,
-                      mu_tilde, eta1_tilde, eta2_tilde, gamma, e, f, T_max,
-                      proposal_type);
+                      mu_tilde, eta1_tilde, eta2_tilde, gamma, e_eta, f_eta,
+                      T_max, proposal_type);
 
     // ---------------------------------------------------------
     // STORE SAMPLES (with thinning)

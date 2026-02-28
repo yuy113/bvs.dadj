@@ -29,6 +29,7 @@
 // =============================================================================
 
 // [[Rcpp::depends(RcppArmadillo)]]
+#include "BayesLogit_Numerics.h"
 #include <RcppArmadillo.h>
 #include <algorithm>
 #include <cmath>
@@ -62,9 +63,8 @@ static inline void mat_remove_rowcol(const arma::mat &src, arma::mat &dest,
 }
 
 // FIX: Renamed parameters for clarity (target ← submat)
-static inline void mat_insert_rowcol(arma::mat &target,
-                                     const arma::mat &submat, arma::uword k,
-                                     arma::uword p) {
+static inline void mat_insert_rowcol(arma::mat &target, const arma::mat &submat,
+                                     arma::uword k, arma::uword p) {
   if (k > 0)
     target.submat(0, 0, k - 1, k - 1) = submat.submat(0, 0, k - 1, k - 1);
   if (k > 0 && k < p - 1)
@@ -120,17 +120,16 @@ static inline double log_beta_pdf(double x, double a, double b) {
 // for both dynamic and fixed networks. Cost: O(p * avg_degree) per sweep.
 // Pre-allocated workspace eliminates heap allocations per call.
 // =============================================================================
-static void proppwilson_dual_sparse(
-    const std::vector<std::unordered_set<int>> &Z_active,
-    const std::vector<std::vector<int>> &R_fix_adj, int p, double mu,
-    double eta1, double eta2, unsigned int T_max,
-    // Pre-allocated workspace
-    std::vector<int> &x_up, std::vector<int> &x_down,
-    std::vector<int> &result) {
+static void
+proppwilson_dual_sparse(const std::vector<std::unordered_set<int>> &Z_active,
+                        const std::vector<std::vector<int>> &R_fix_adj, int p,
+                        double mu, double eta1, double eta2, unsigned int T_max,
+                        // Pre-allocated workspace
+                        std::vector<int> &x_up, std::vector<int> &x_down,
+                        std::vector<int> &result) {
   unsigned int T = 2;
 
-  int seed_base =
-      static_cast<int>(std::floor(R::runif(0.0, 1.0) * 1000.0)) + 1;
+  int seed_base = static_cast<int>(std::floor(R::runif(0.0, 1.0) * 1000.0)) + 1;
 
   auto not_coalesced = [&]() {
     for (int k = 0; k < p; ++k)
@@ -227,17 +226,17 @@ static void proppwilson_dual_sparse(
 // FIX 5: Proposals bounded to (0, eta_sd).
 // Uses sparse sufficient statistics: O(|E_dyn| + |E_fix|) not O(p^2).
 // =============================================================================
-static void moller_update_dual(
-    const std::vector<std::unordered_set<int>> &Z_active,
-    const std::vector<std::vector<int>> &R_fix_adj, int p, double mu,
-    double &eta1, double &eta2, double eta1_sd, double eta2_sd,
-    double mu_tilde, double eta1_tilde, double eta2_tilde,
-    const arma::uvec &gamma, double e, double f, unsigned int T_max,
-    int proposal_type,
-    // Pre-allocated PW workspace
-    std::vector<int> &pw_x_up, std::vector<int> &pw_x_down,
-    std::vector<int> &om1, std::vector<int> &om2, std::vector<int> &om1n,
-    std::vector<int> &om2n) {
+static void
+moller_update_dual(const std::vector<std::unordered_set<int>> &Z_active,
+                   const std::vector<std::vector<int>> &R_fix_adj, int p,
+                   double mu, double &eta1, double &eta2, double eta1_sd,
+                   double eta2_sd, double mu_tilde, double eta1_tilde,
+                   double eta2_tilde, const arma::uvec &gamma, double e,
+                   double f, unsigned int T_max, int proposal_type,
+                   // Pre-allocated PW workspace
+                   std::vector<int> &pw_x_up, std::vector<int> &pw_x_down,
+                   std::vector<int> &om1, std::vector<int> &om2,
+                   std::vector<int> &om1n, std::vector<int> &om2n) {
 
   double eta1_new, eta2_new;
   double log_prop_ratio_eta1 = 0.0, log_prop_ratio_eta2 = 0.0;
@@ -375,9 +374,9 @@ static void moller_update_dual(
       log_target_eta2 + log_aux_eta2 + log_norm_eta2 + log_prop_ratio_eta2;
 
   // Accept/reject independently
-  if (std::log(R::runif(0.0, 1.0)) < log_MH_eta1)
+  if (bvs_dadj::safe_mh_accept(log_MH_eta1))
     eta1 = eta1_new;
-  if (std::log(R::runif(0.0, 1.0)) < log_MH_eta2)
+  if (bvs_dadj::safe_mh_accept(log_MH_eta2))
     eta2 = eta2_new;
 }
 
@@ -396,15 +395,12 @@ static void moller_update_dual(
 // [[Rcpp::export]]
 Rcpp::List BayesLogit_DualNet_GGM(
     const arma::mat &X, const arma::vec &y, const arma::mat &S_ggm,
-    double n_ggm, const Rcpp::IntegerMatrix &R_fix_int,
-    int niter, int burnin,
+    double n_ggm, const Rcpp::IntegerMatrix &R_fix_int, int niter, int burnin,
     double mu, double nu0, double sigmasq0, double alpha0, double beta0,
-    double h, int n_mh_gamma,
-    double v0_ggm, double v1_ggm, double pii_ggm, double lambda_ggm,
-    double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde,
-    double eta2_tilde, double e_eta, double f_eta,
-    unsigned int T_max, int proposal_type,
-    int thin = 1,
+    double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm,
+    double lambda_ggm, double eta1_sd, double eta2_sd, double mu_tilde,
+    double eta1_tilde, double eta2_tilde, double e_eta, double f_eta,
+    unsigned int T_max, int proposal_type, int thin = 1, int n_thin_gb = 3,
     Rcpp::Nullable<Rcpp::NumericVector> beta_in = R_NilValue,
     Rcpp::Nullable<Rcpp::IntegerVector> gamma_in = R_NilValue,
     double alpha_in = 0.0) {
@@ -416,11 +412,12 @@ Rcpp::List BayesLogit_DualNet_GGM(
   if (S_ggm.n_rows != p || S_ggm.n_cols != p)
     Rcpp::stop("S_ggm dimensions (%d x %d) must match p = %d",
                (int)S_ggm.n_rows, (int)S_ggm.n_cols, (int)p);
-  if ((arma::uword)R_fix_int.nrow() != p ||
-      (arma::uword)R_fix_int.ncol() != p)
+  if ((arma::uword)R_fix_int.nrow() != p || (arma::uword)R_fix_int.ncol() != p)
     Rcpp::stop("R_fix dimensions must match p = %d", (int)p);
   if (thin < 1)
     thin = 1;
+  if (n_thin_gb < 1)
+    n_thin_gb = 1;
   if (n_mh_gamma < 1)
     n_mh_gamma = 1;
 
@@ -496,6 +493,11 @@ Rcpp::List BayesLogit_DualNet_GGM(
   // FIX 6: Running posterior edge inclusion probability instead of Z_list
   // Saves ~800 MB for p=200, niter=5000
   arma::mat Z_pip(p, p, arma::fill::zeros); // accumulate, divide at end
+  Rcpp::List Z_list(n_save);
+  std::vector<int> edge_rows, edge_cols;
+  const arma::uword max_edges = p * (p - 1) / 2;
+  edge_rows.reserve(std::min(max_edges, (arma::uword)1000));
+  edge_cols.reserve(std::min(max_edges, (arma::uword)1000));
 
   // =========================================================================
   // 3. MCMC LOOP
@@ -626,75 +628,70 @@ Rcpp::List BayesLogit_DualNet_GGM(
     } // end GGM column sweep
 
     // -----------------------------------------------------------------
-    // STEP B: Gamma (Variable Selection) via MH
-    //
-    // FIX 8: n_mh_gamma is now a parameter
-    // FIX 10: Safe index generation
-    // Uses sparse adjacency lists for Ising neighborhood sums
+    // STEP B+C: Gamma + Beta with inner thinning (n_thin_gb rounds)
     // -----------------------------------------------------------------
-    for (int mh = 0; mh < n_mh_gamma; ++mh) {
-      // FIX 10: Safe random index in {0, ..., p-1}
-      arma::uword j =
-          static_cast<arma::uword>(std::floor(R::runif(0.0, (double)p)));
-      if (j >= p)
-        j = p - 1;
+    for (int thin_gb = 0; thin_gb < n_thin_gb; ++thin_gb) {
 
-      int g_curr = (int)gamma(j);
-      int g_prop = 1 - g_curr;
-      double b_curr = beta_vec(j);
-      double b_prop = (g_prop == 1) ? R::rnorm(beta0, sd_sig) : 0.0;
+      // STEP B: Gamma (Variable Selection) via MH
+      for (int mh = 0; mh < n_mh_gamma; ++mh) {
+        arma::uword j =
+            static_cast<arma::uword>(std::floor(R::runif(0.0, (double)p)));
+        if (j >= p)
+          j = p - 1;
 
-      // Incremental linear predictor update (FIX 13: pre-allocated z_prop)
-      z_prop = z + (b_prop - b_curr) * X.col(j);
-      double ll_prop = calc_loglik(y, z_prop, alpha);
+        int g_curr = (int)gamma(j);
+        int g_prop = 1 - g_curr;
+        double b_curr = beta_vec(j);
+        double b_prop = (g_prop == 1) ? R::rnorm(beta0, sd_sig) : 0.0;
 
-      // Ising prior: sparse neighbor sums — O(degree) not O(p)
-      double diff = (double)(g_prop - g_curr);
-      double neigh_dyn = 0.0;
-      for (int nbr : Z_active[j])
-        neigh_dyn += gamma(nbr);
-      double neigh_fix = 0.0;
-      for (int nbr : R_fix_adj[j])
-        neigh_fix += gamma(nbr);
-
-      double ising_diff = diff * (mu + eta1 * neigh_dyn + eta2 * neigh_fix);
-      double log_ratio = (ll_prop - loglik) + ising_diff;
-
-      if (std::log(R::runif(0, 1)) < log_ratio) {
-        gamma(j) = g_prop;
-        beta_vec(j) = b_prop;
-        z = z_prop;
-        loglik = ll_prop;
-      }
-    }
-
-    // Build active index set
-    active_idx.clear();
-    for (arma::uword j = 0; j < p; ++j)
-      if (gamma(j) == 1)
-        active_idx.push_back(j);
-
-    // -----------------------------------------------------------------
-    // STEP C: Beta (Metropolis for active variables)
-    // -----------------------------------------------------------------
-    {
-      double sd_beta = sd_sig * 0.1;
-      for (arma::uword k = 0; k < active_idx.size(); ++k) {
-        arma::uword j = active_idx[k];
-        double b_prop = R::rnorm(beta_vec(j), sd_beta);
-        z_prop = z + (b_prop - beta_vec(j)) * X.col(j);
+        z_prop = z + (b_prop - b_curr) * X.col(j);
         double ll_prop = calc_loglik(y, z_prop, alpha);
-        double pr_curr =
-            -0.5 * std::pow(beta_vec(j) - beta0, 2) / sigmasq;
-        double pr_prop = -0.5 * std::pow(b_prop - beta0, 2) / sigmasq;
-        if (std::log(R::runif(0, 1)) <
-            (ll_prop - loglik) + (pr_prop - pr_curr)) {
+
+        double diff = (double)(g_prop - g_curr);
+        double neigh_dyn = 0.0;
+        for (int nbr : Z_active[j])
+          neigh_dyn += gamma(nbr);
+        double neigh_fix = 0.0;
+        for (int nbr : R_fix_adj[j])
+          neigh_fix += gamma(nbr);
+
+        double ising_diff = diff * (mu + eta1 * neigh_dyn + eta2 * neigh_fix);
+        double log_ratio = (ll_prop - loglik) + ising_diff;
+
+        if (bvs_dadj::safe_mh_accept(log_ratio)) {
+          gamma(j) = g_prop;
           beta_vec(j) = b_prop;
           z = z_prop;
           loglik = ll_prop;
         }
       }
-    }
+
+      // Build active index set
+      active_idx.clear();
+      for (arma::uword j = 0; j < p; ++j)
+        if (gamma(j) == 1)
+          active_idx.push_back(j);
+
+      // STEP C: Beta (Metropolis for active variables)
+      {
+        double sd_beta = sd_sig * 0.1;
+        for (arma::uword k = 0; k < active_idx.size(); ++k) {
+          arma::uword j = active_idx[k];
+          double b_prop = R::rnorm(beta_vec(j), sd_beta);
+          z_prop = z + (b_prop - beta_vec(j)) * X.col(j);
+          double ll_prop = calc_loglik(y, z_prop, alpha);
+          double pr_curr = -0.5 * std::pow(beta_vec(j) - beta0, 2) / sigmasq;
+          double pr_prop = -0.5 * std::pow(b_prop - beta0, 2) / sigmasq;
+          if (bvs_dadj::safe_mh_accept((ll_prop - loglik) +
+                                        (pr_prop - pr_curr))) {
+            beta_vec(j) = b_prop;
+            z = z_prop;
+            loglik = ll_prop;
+          }
+        }
+      }
+
+    } // end inner thinning for gamma + beta
 
     // -----------------------------------------------------------------
     // STEP D: Alpha
@@ -703,12 +700,10 @@ Rcpp::List BayesLogit_DualNet_GGM(
       double sd_alpha = std::sqrt(h) * sd_sig;
       double a_prop = R::rnorm(alpha, sd_alpha);
       double ll_a_prop = calc_loglik(y, z, a_prop);
-      double pr_a_curr =
-          -0.5 * std::pow(alpha - alpha0, 2) / (h * sigmasq);
-      double pr_a_prop =
-          -0.5 * std::pow(a_prop - alpha0, 2) / (h * sigmasq);
-      if (std::log(R::runif(0, 1)) <
-          (ll_a_prop - loglik) + (pr_a_prop - pr_a_curr)) {
+      double pr_a_curr = -0.5 * std::pow(alpha - alpha0, 2) / (h * sigmasq);
+      double pr_a_prop = -0.5 * std::pow(a_prop - alpha0, 2) / (h * sigmasq);
+      if (bvs_dadj::safe_mh_accept((ll_a_prop - loglik) +
+                                     (pr_a_prop - pr_a_curr))) {
         alpha = a_prop;
         loglik = ll_a_prop;
       }
@@ -719,14 +714,12 @@ Rcpp::List BayesLogit_DualNet_GGM(
     // FIX 11: Floor to prevent underflow
     // -----------------------------------------------------------------
     {
-      double sig_prop =
-          std::exp(std::log(sigmasq) + R::rnorm(0, 0.2));
+      double sig_prop = std::exp(std::log(sigmasq) + R::rnorm(0, 0.2));
       sig_prop = std::max(sig_prop, 1e-10); // FIX 11
 
       double shape = nu0 / 2.0;
       double scale = sigmasq0 * nu0 / 2.0;
-      double lp_sig_curr =
-          -(shape + 1.0) * std::log(sigmasq) - scale / sigmasq;
+      double lp_sig_curr = -(shape + 1.0) * std::log(sigmasq) - scale / sigmasq;
       double lp_sig_prop =
           -(shape + 1.0) * std::log(sig_prop) - scale / sig_prop;
 
@@ -742,19 +735,17 @@ Rcpp::List BayesLogit_DualNet_GGM(
       double lp_beta_prop =
           -0.5 * n_active_beta * std::log(sig_prop) - 0.5 * ss_beta / sig_prop;
 
-      double lp_alpha_curr =
-          -0.5 * std::log(h * sigmasq) -
-          0.5 * std::pow(alpha - alpha0, 2) / (h * sigmasq);
-      double lp_alpha_prop =
-          -0.5 * std::log(h * sig_prop) -
-          0.5 * std::pow(alpha - alpha0, 2) / (h * sig_prop);
+      double lp_alpha_curr = -0.5 * std::log(h * sigmasq) -
+                             0.5 * std::pow(alpha - alpha0, 2) / (h * sigmasq);
+      double lp_alpha_prop = -0.5 * std::log(h * sig_prop) -
+                             0.5 * std::pow(alpha - alpha0, 2) / (h * sig_prop);
 
       // Jacobian of log-transform proposal
       double log_mh_sig = (lp_sig_prop - lp_sig_curr) +
                           (lp_beta_prop - lp_beta_curr) +
                           (lp_alpha_prop - lp_alpha_curr) +
                           (std::log(sig_prop) - std::log(sigmasq));
-      if (std::log(R::runif(0, 1)) < log_mh_sig)
+      if (bvs_dadj::safe_mh_accept(log_mh_sig))
         sigmasq = sig_prop;
     }
 
@@ -763,9 +754,9 @@ Rcpp::List BayesLogit_DualNet_GGM(
     // FIX 3, 4, 5: Proper exchange algorithm with complete priors
     // -----------------------------------------------------------------
     moller_update_dual(Z_active, R_fix_adj, (int)p, mu, eta1, eta2, eta1_sd,
-                       eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, gamma,
-                       e_eta, f_eta, T_max, proposal_type, pw_x_up,
-                       pw_x_down, pw_om1, pw_om2, pw_om1n, pw_om2n);
+                       eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, gamma, e_eta,
+                       f_eta, T_max, proposal_type, pw_x_up, pw_x_down, pw_om1,
+                       pw_om2, pw_om1n, pw_om2n);
 
     // -----------------------------------------------------------------
     // STORE SAMPLES
@@ -780,6 +771,28 @@ Rcpp::List BayesLogit_DualNet_GGM(
         eta2_out(s) = eta2;
         alpha_out(s) = alpha;
         sigmasq_out(s) = sigmasq;
+
+        edge_rows.clear();
+        edge_cols.clear();
+        for (arma::uword r = 0; r < p; ++r) {
+          for (int c : Z_active[r]) {
+            if (c > (int)r) {
+              edge_rows.push_back((int)r);
+              edge_cols.push_back((int)c);
+            }
+          }
+        }
+        int ne = (int)edge_rows.size();
+        if (ne > 0) {
+          Rcpp::IntegerMatrix edges(ne, 2);
+          for (int ei = 0; ei < ne; ++ei) {
+            edges(ei, 0) = edge_rows[ei];
+            edges(ei, 1) = edge_cols[ei];
+          }
+          Z_list[s] = edges;
+        } else {
+          Z_list[s] = Rcpp::IntegerMatrix(0, 2);
+        }
       }
     }
 
@@ -802,12 +815,10 @@ Rcpp::List BayesLogit_DualNet_GGM(
   Z_pip = Z_pip + Z_pip.t();
 
   return Rcpp::List::create(
-      Rcpp::Named("beta") = beta_out,
-      Rcpp::Named("gamma") = gamma_out,
-      Rcpp::Named("eta_dyn") = eta1_out,
-      Rcpp::Named("eta_fix") = eta2_out,
-      Rcpp::Named("alpha") = alpha_out,
-      Rcpp::Named("sigmasq") = sigmasq_out,
+      Rcpp::Named("beta") = beta_out, Rcpp::Named("gamma") = gamma_out,
+      Rcpp::Named("eta1") = eta1_out, Rcpp::Named("eta2") = eta2_out,
+      Rcpp::Named("alpha") = alpha_out, Rcpp::Named("sigmasq") = sigmasq_out,
+      Rcpp::Named("Z_list") = Z_list,
       Rcpp::Named("Z_pip") = Z_pip // Posterior edge inclusion probabilities
   );
 }

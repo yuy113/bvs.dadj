@@ -24,12 +24,11 @@
 #'
 #' @export
 prepare_sparse_S <- function(X, threshold = 1e-4) {
-
   if (!is.matrix(X)) X <- as.matrix(X)
 
   p <- ncol(X)
   n <- nrow(X)
-  S <- crossprod(X)          # p x p scatter matrix (X'X)
+  S <- crossprod(X) # p x p scatter matrix (X'X)
   S_diag <- diag(S)
 
   # Threshold small off-diagonal entries
@@ -41,19 +40,21 @@ prepare_sparse_S <- function(X, threshold = 1e-4) {
   S_upper <- S_thr
   S_upper[lower.tri(S_upper)] <- 0
 
-  sm <- Matrix::sparseMatrix(i = which(S_upper != 0, arr.ind = TRUE)[, 1],
-                             j = which(S_upper != 0, arr.ind = TRUE)[, 2],
-                             x = S_upper[S_upper != 0],
-                             dims = c(p, p))
+  sm <- Matrix::sparseMatrix(
+    i = which(S_upper != 0, arr.ind = TRUE)[, 1],
+    j = which(S_upper != 0, arr.ind = TRUE)[, 2],
+    x = S_upper[S_upper != 0],
+    dims = c(p, p)
+  )
 
   sm_summary <- Matrix::summary(sm)
   S_csc <- as(sm, "CsparseMatrix")
 
   list(
-    S_i    = as.integer(S_csc@i),          # 0-based row indices
-    S_p    = as.integer(S_csc@p),          # 0-based col pointers
-    S_x    = as.double(S_csc@x),           # nonzero values
-    S_diag = as.double(S_diag),            # diagonal
+    S_i    = as.integer(S_csc@i), # 0-based row indices
+    S_p    = as.integer(S_csc@p), # 0-based col pointers
+    S_x    = as.double(S_csc@x), # nonzero values
+    S_diag = as.double(S_diag), # diagonal
     p      = as.integer(p)
   )
 }
@@ -83,10 +84,11 @@ prepare_sparse_S <- function(X, threshold = 1e-4) {
 #' @examples
 #' \dontrun{
 #' set.seed(42)
-#' n <- 200; p <- 50
+#' n <- 200
+#' p <- 50
 #' X <- matrix(rnorm(n * p), n, p)
 #' adj <- estimate_glasso_adj(X, criterion = "ebic")
-#' sum(adj)  # number of detected edges
+#' sum(adj) # number of detected edges
 #' }
 #'
 #' @export
@@ -95,28 +97,34 @@ estimate_glasso_adj <- function(X,
                                 nlambda = 30,
                                 lambda.min.ratio = 0.01,
                                 symmetrize = TRUE) {
-
   criterion <- match.arg(criterion)
 
   if (!requireNamespace("huge", quietly = TRUE)) {
     stop("Package 'huge' is required. Install it via install.packages('huge').")
   }
 
-  fit <- huge::huge(X, method = "glasso",
-                    nlambda = nlambda,
-                    lambda.min.ratio = lambda.min.ratio,
-                    verbose = FALSE)
+  fit <- huge::huge(X,
+    method = "glasso",
+    nlambda = nlambda,
+    lambda.min.ratio = lambda.min.ratio,
+    verbose = FALSE
+  )
   sel <- huge::huge.select(fit, criterion = criterion, verbose = FALSE)
 
   # Extract precision matrix -> binary adjacency
-  prec <- as.matrix(sel$opt.icov)
-  p    <- ncol(prec)
-  adj  <- matrix(as.integer(prec != 0), p, p)
+  if (is.null(sel$opt.icov)) {
+    warning("huge.select returned NULL opt.icov. Returning dense 0 matrix.")
+    prec <- matrix(0, ncol(X), ncol(X))
+  } else {
+    prec <- as.matrix(sel$opt.icov)
+  }
+  p <- ncol(prec)
+  adj <- matrix(as.integer(prec != 0), p, p)
   diag(adj) <- 0L
 
   if (symmetrize) {
-    adj <- pmax(adj, t(adj))           # symmetrize
-    adj[lower.tri(adj)] <- 0L          # upper-tri only
+    adj <- pmax(adj, t(adj)) # symmetrize
+    adj[lower.tri(adj)] <- 0L # upper-tri only
   }
 
   adj
@@ -141,16 +149,18 @@ estimate_glasso_adj <- function(X,
 .init_mcmc <- function(p, mu, nu0, sigmasq0, alpha0, beta0, h) {
   omega <- exp(mu) / (1 + exp(mu))
   gamma_init <- rbinom(p, 1, omega)
-  beta_init  <- rep(0, p)
-  sigmasq    <- 1 / rgamma(1, nu0 / 2, nu0 * sigmasq0 / 2)
+  beta_init <- rep(0, p)
+  sigmasq <- 1 / rgamma(1, nu0 / 2, nu0 * sigmasq0 / 2)
   sigma_beta <- sqrt(sigmasq)
   sigma_alpha <- sqrt(h * sigmasq)
-  alpha_init  <- rnorm(1, alpha0, sigma_alpha)
+  alpha_init <- rnorm(1, alpha0, sigma_alpha)
   beta_init[gamma_init == 1] <- rnorm(sum(gamma_init), beta0, sigma_beta)
 
-  list(beta_init  = as.numeric(beta_init),
-       gamma_init = as.integer(gamma_init),
-       alpha_init = as.double(alpha_init))
+  list(
+    beta_init = as.numeric(beta_init),
+    gamma_init = as.integer(gamma_init),
+    alpha_init = as.double(alpha_init)
+  )
 }
 
 
@@ -175,4 +185,28 @@ estimate_glasso_adj <- function(X,
   diag(adj) <- 0L
   storage.mode(adj) <- "integer"
   adj
+}
+
+
+# Normalize sparse index vectors to 1-based R indexing.
+# Some historical backends emitted 0-based indices; current sparse backends
+# emit 1-based indices for gamma/beta sparse snapshots.
+# This helper keeps whichever interpretation yields more valid in-range entries.
+.normalize_sparse_idx <- function(idx, p) {
+  idx <- as.integer(idx)
+  idx <- idx[is.finite(idx)]
+  if (!length(idx)) {
+    return(integer(0))
+  }
+
+  idx_a <- idx
+  ok_a <- idx_a >= 1L & idx_a <= p
+
+  idx_b <- idx + 1L
+  ok_b <- idx_b >= 1L & idx_b <= p
+
+  if (sum(ok_b) > sum(ok_a)) {
+    return(unique(as.integer(idx_b[ok_b])))
+  }
+  unique(as.integer(idx_a[ok_a]))
 }

@@ -42,10 +42,11 @@ Requires the \pkg{huge} package to be installed.  The function
 \examples{
 \dontrun{
 set.seed(42)
-n <- 200; p <- 50
+n <- 200
+p <- 50
 X <- matrix(rnorm(n * p), n, p)
 adj <- estimate_glasso_adj(X, criterion = "ebic")
-sum(adj)  # number of detected edges
+sum(adj) # number of detected edges
 }
 
 }

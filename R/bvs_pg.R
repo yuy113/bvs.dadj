@@ -1,8 +1,8 @@
 #' Bayesian Variable Selection via Polya-Gamma Augmentation
 #'
 #' Bayesian variable selection for logistic regression with an Ising/MRF prior
-#' on the inclusion indicators gamma, using Polya-Gamma data augmentation for
-#' exact Gibbs sampling of beta and alpha.  The Ising coupling parameter eta is
+#' on the variable selection indicators gamma, using Polya-Gamma data augmentation for
+#' exact Gibbs sampling of beta and alpha.  The Ising/MRF coupling parameters eta1/eta2 are
 #' updated via Moller et al. (2006) auxiliary variable MH with Propp-Wilson
 #' perfect simulation.
 #'

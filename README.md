@@ -216,10 +216,9 @@ Use `summary()`, `print()`, and `plot()` S3 methods for post-processing.
 
 ## References
 
-- Wang, H. (2012). Bayesian Graphical Lasso Models and Efficient Posterior Computation. *Bayesian Analysis*, 7(4), 867–886.
+- Wang, H. (2015). Scaling It Up: Stochastic Search Structure Learning in Graphical Models *Bayesian Analysis*, 10(2), 351–377.
 - Möller, J., Pettitt, A. N., Reeves, R., & Berthelsen, K. K. (2006). An efficient Markov chain Monte Carlo method for distributions with intractable normalising constants. *Biometrika*, 93(2), 451–458.
 - Polson, N. G., Scott, J. G., & Windle, J. (2013). Bayesian inference for logistic models using Pólya–Gamma latent variables. *Journal of the American Statistical Association*, 108(504), 1339–1349.
-- Liu, F., & Chakraborty, S. (2022). Bayesian variable selection with network-structured priors. *(Related methodology reference.)*
 
 ## License
 

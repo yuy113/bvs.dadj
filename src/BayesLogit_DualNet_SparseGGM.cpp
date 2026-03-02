@@ -126,8 +126,15 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
 
   const int total_iter = niter + burnin;
   for (int iter = 0; iter < total_iter; ++iter) {
-    if (iter > 0 && (iter % 2000) == 0)
+    if (iter > 0 && (iter % 5000) == 0) {
       Rcpp::checkUserInterrupt();
+      int model_size = 0;
+      for (int j = 0; j < p; ++j)
+        model_size += static_cast<int>(gamma[j]);
+      Rcpp::Rcout << "Iter: " << iter << " | Model size: " << model_size
+                  << " | Edges: " << n_edges << " | eta1: " << eta1
+                  << " | eta2: " << eta2 << "\n";
+    }
 
     const double sd_sig = std::sqrt(sigmasq);
 

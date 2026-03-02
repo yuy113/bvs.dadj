@@ -1,28 +1,24 @@
 // [[Rcpp::depends(RcppArmadillo)]]
-#include <RcppArmadillo.h>
-#include "BayesLogit_Sparse_Helpers.h"
 #include "BayesLogit_BlockPG.h"
+#include "BayesLogit_Sparse_Helpers.h"
+#include <RcppArmadillo.h>
 
 // [[Rcpp::export]]
 Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
-    const arma::sp_mat &X, const arma::vec &y,
-    const Rcpp::IntegerVector &S_i, const Rcpp::IntegerVector &S_p_csc,
-    const Rcpp::NumericVector &S_x, const Rcpp::NumericVector &S_diag,
-    const Rcpp::IntegerVector &R_fix_i,
-    const Rcpp::IntegerVector &R_fix_p_csc,
-    int p_ggm, int niter, int burnin,
+    const arma::sp_mat &X, const arma::vec &y, const Rcpp::IntegerVector &S_i,
+    const Rcpp::IntegerVector &S_p_csc, const Rcpp::NumericVector &S_x,
+    const Rcpp::NumericVector &S_diag, const Rcpp::IntegerVector &R_fix_i,
+    const Rcpp::IntegerVector &R_fix_p_csc, int p_ggm, int niter, int burnin,
     double mu, double nu0, double sigmasq0, double alpha0, double beta0,
-    double h, int n_mh_gamma,
-    double v0_ggm, double v1_ggm, double pii_ggm,
+    double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm,
     double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde,
     double eta2_tilde, double e_eta, double f_eta, unsigned int T_max,
     int proposal_type, int thin = 1,
     Rcpp::Nullable<Rcpp::NumericVector> beta_in = R_NilValue,
     Rcpp::Nullable<Rcpp::IntegerVector> gamma_in = R_NilValue,
-    double alpha_in = 0.0,
-    bool store_beta = true, bool store_gamma = true,
-    bool store_Z_list = false, bool store_Z_pip = true,
-    int block_size = 1, int pcg_threshold = 500) {
+    double alpha_in = 0.0, bool store_beta = true, bool store_gamma = true,
+    bool store_Z_list = false, bool store_Z_pip = true, int block_size = 1,
+    int pcg_threshold = 500) {
   Rcpp::RNGScope scope;
 
   const int n = static_cast<int>(X.n_rows);
@@ -43,7 +39,7 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
 
   int d_max = 0;
   for (int j = 0; j < p; ++j) {
-    int d = S.col_ptrs[j+1] - S.col_ptrs[j];
+    int d = S.col_ptrs[j + 1] - S.col_ptrs[j];
     d_max = std::max(d_max, d);
   }
 
@@ -80,9 +76,10 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
   std::vector<uint8_t> Z_active_flag(S.nnz, 1);
   int n_edges = 0;
   for (int j = 0; j < p; ++j) {
-    int start = S.col_ptrs[j], end = S.col_ptrs[j+1];
-    for(int idx = start; idx < end; ++idx) {
-      if (S.row_idx[idx] > j) ++n_edges;
+    int start = S.col_ptrs[j], end = S.col_ptrs[j + 1];
+    for (int idx = start; idx < end; ++idx) {
+      if (S.row_idx[idx] > j)
+        ++n_edges;
     }
   }
 
@@ -134,18 +131,26 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
 
   const int total_iter = niter + burnin;
   for (int iter = 0; iter < total_iter; ++iter) {
-    if (iter > 0 && (iter % 2000) == 0)
+    if (iter > 0 && (iter % 5000) == 0) {
       Rcpp::checkUserInterrupt();
+      int model_size = 0;
+      for (int j = 0; j < p; ++j)
+        model_size += static_cast<int>(gamma[j]);
+      Rcpp::Rcout << "Iter: " << iter << " | Model size: " << model_size
+                  << " | Edges: " << n_edges << " | eta1: " << eta1
+                  << " | eta2: " << eta2 << "\n";
+    }
 
     sigmasq = clamp_scalar(sigmasq, SIGMASQ_MIN, SIGMASQ_MAX);
     const double sd_sig = std::sqrt(sigmasq);
 
-    ggm_column_sweep_sparse(S, Z_active_flag, p, log_pii, log_1pii, lv0h, lv1h, iv0,
-                            iv1, A_sub, s_ggm, noise_ggm, n_edges);
+    ggm_column_sweep_sparse(S, Z_active_flag, p, log_pii, log_1pii, lv0h, lv1h,
+                            iv0, iv1, A_sub, s_ggm, noise_ggm, n_edges);
 
     {
       for (int i = 0; i < n; ++i) {
-        const double lp = clamp_scalar(alpha + Xb(i), -LINPRED_CLIP, LINPRED_CLIP);
+        const double lp =
+            clamp_scalar(alpha + Xb(i), -LINPRED_CLIP, LINPRED_CLIP);
         omega_pg(i) = sample_pg(lp, pg_rng);
       }
     }
@@ -158,8 +163,8 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
         bvs_dadj_block::PCGConfig pcg_cfg(1e-6, 200, pcg_threshold);
         arma::vec beta_act;
         bool pcg_ok = bvs_dadj_block::pcg_sample_beta_sparse(
-            beta_act, X, active_idx, omega_pg, kappa, alpha,
-            1.0 / sigmasq, pcg_cfg);
+            beta_act, X, active_idx, omega_pg, kappa, alpha, 1.0 / sigmasq,
+            pcg_cfg);
         if (pcg_ok && static_cast<int>(beta_act.n_elem) == p_act) {
           clamp_vec_inplace(beta_act, -BETA_ABS_MAX, BETA_ABS_MAX);
           beta_vec.zeros();
@@ -192,9 +197,9 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
 
         if (chol_ok) {
           arma::vec mb;
-          bool solve_ok = arma::solve(mb, arma::trimatl(L.t()), rhs,
-                                      arma::solve_opts::fast +
-                                          arma::solve_opts::no_approx);
+          bool solve_ok =
+              arma::solve(mb, arma::trimatl(L.t()), rhs,
+                          arma::solve_opts::fast + arma::solve_opts::no_approx);
           if (solve_ok) {
             solve_ok = arma::solve(mb, arma::trimatu(L), mb,
                                    arma::solve_opts::fast +
@@ -246,7 +251,8 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
       auto neigh_dyn_fn = [&](int jj, std::function<void(int)> cb) {
         int s = S.col_ptrs[jj], e = S.col_ptrs[jj + 1];
         for (int idx = s; idx < e; ++idx) {
-          if (Z_active_flag[idx]) cb(S.row_idx[idx]);
+          if (Z_active_flag[idx])
+            cb(S.row_idx[idx]);
         }
       };
       auto neigh_fix_fn = [&](int jj, std::function<void(int)> cb) {
@@ -260,9 +266,8 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
       auto flat = bvs_dadj_block::flatten_clusters(clusters);
 
       bvs_dadj_block::uncollapsed_gamma_sweep_dual_sparse(
-          gamma, beta_vec, Xb, X, y01, alpha,
-          sigmasq, beta0, mu, eta1, eta2, flat,
-          neigh_dyn_fn, neigh_fix_fn);
+          gamma, beta_vec, Xb, X, y01, alpha, sigmasq, beta0, mu, eta1, eta2,
+          flat, neigh_dyn_fn, neigh_fix_fn);
 
       // Rebuild active_idx / active_pos from scratch
       active_idx.clear();
@@ -276,7 +281,8 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
     } else {
       // --- Original single-variable MH ---
       for (int mh = 0; mh < n_mh_gamma; ++mh) {
-        int j = static_cast<int>(std::floor(R::runif(0.0, static_cast<double>(p))));
+        int j =
+            static_cast<int>(std::floor(R::runif(0.0, static_cast<double>(p))));
         if (j >= p)
           j = p - 1;
 
@@ -287,15 +293,16 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
         b_prop = clamp_scalar(b_prop, -BETA_ABS_MAX, BETA_ABS_MAX);
         double db = b_prop - b_curr;
 
-        double ll_diff = column_ll_diff(y01, Xb, alpha, col_ptr, row_idx, xvals,
-                                        j, db);
+        double ll_diff =
+            column_ll_diff(y01, Xb, alpha, col_ptr, row_idx, xvals, j, db);
         double neigh_dyn = 0.0;
-        int start = S.col_ptrs[j], end = S.col_ptrs[j+1];
+        int start = S.col_ptrs[j], end = S.col_ptrs[j + 1];
         for (int idx = start; idx < end; ++idx) {
-          if (Z_active_flag[idx]) neigh_dyn += static_cast<int>(gamma[S.row_idx[idx]]);
+          if (Z_active_flag[idx])
+            neigh_dyn += static_cast<int>(gamma[S.row_idx[idx]]);
         }
         double neigh_fix = 0.0;
-        int r_start = R_fix.col_ptrs[j], r_end = R_fix.col_ptrs[j+1];
+        int r_start = R_fix.col_ptrs[j], r_end = R_fix.col_ptrs[j + 1];
         for (int idx = r_start; idx < r_end; ++idx) {
           neigh_fix += static_cast<int>(gamma[R_fix.row_idx[idx]]);
         }
@@ -336,8 +343,10 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
       double lb_p = -0.5 * n_act * std::log(sig_prop) - 0.5 * ss / sig_prop;
 
       double da = alpha - alpha0;
-      double la_c = -0.5 * std::log(h * sigmasq) - 0.5 * da * da / (h * sigmasq);
-      double la_p = -0.5 * std::log(h * sig_prop) - 0.5 * da * da / (h * sig_prop);
+      double la_c =
+          -0.5 * std::log(h * sigmasq) - 0.5 * da * da / (h * sigmasq);
+      double la_p =
+          -0.5 * std::log(h * sig_prop) - 0.5 * da * da / (h * sig_prop);
 
       double lmh = (lp_p + lb_p + la_p) - (lp_c + lb_c + la_c) +
                    std::log(sig_prop / sigmasq);
@@ -352,35 +361,33 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
         eta1_tilde, eta2_tilde, gamma, e_eta, f_eta, T_max, proposal_type,
         pw_up, pw_dn, pw_om1, pw_om2, pw_om1n, pw_om2n);
 
-    maybe_store_sparse_state(iter, burnin, thin, n_save, store_beta,
-                             store_gamma, store_Z_list, active_idx, beta_vec,
-                             S, Z_active_flag, eta1_out, eta2_out, true, alpha_out,
-                             sigmasq_out, eta1, eta2, alpha, sigmasq,
-                             beta_out_list, gamma_out_list, Z_list, edge_r,
-                             edge_c);
+    maybe_store_sparse_state(
+        iter, burnin, thin, n_save, store_beta, store_gamma, store_Z_list,
+        active_idx, beta_vec, S, Z_active_flag, eta1_out, eta2_out, true,
+        alpha_out, sigmasq_out, eta1, eta2, alpha, sigmasq, beta_out_list,
+        gamma_out_list, Z_list, edge_r, edge_c);
 
     if (iter >= burnin)
       accumulate_sparse_pip(S, Z_active_flag, store_Z_pip, Z_pip_cnt);
   }
 
   double n_post = static_cast<double>(total_iter - burnin);
-  Rcpp::List pip_trip = build_sparse_pip_triplet(S, store_Z_pip, Z_pip_cnt, n_post);
+  Rcpp::List pip_trip =
+      build_sparse_pip_triplet(S, store_Z_pip, Z_pip_cnt, n_post);
 
-  SEXP beta_out_sexp = store_beta ? static_cast<SEXP>(beta_out_list) : R_NilValue;
-  SEXP gamma_out_sexp = store_gamma ? static_cast<SEXP>(gamma_out_list) : R_NilValue;
+  SEXP beta_out_sexp =
+      store_beta ? static_cast<SEXP>(beta_out_list) : R_NilValue;
+  SEXP gamma_out_sexp =
+      store_gamma ? static_cast<SEXP>(gamma_out_list) : R_NilValue;
   SEXP z_list_sexp = store_Z_list ? static_cast<SEXP>(Z_list) : R_NilValue;
 
   return Rcpp::List::create(
       Rcpp::Named("beta") = beta_out_sexp,
-      Rcpp::Named("gamma") = gamma_out_sexp,
-      Rcpp::Named("eta1") = eta1_out,
-      Rcpp::Named("eta2") = eta2_out,
-      Rcpp::Named("alpha") = alpha_out,
-      Rcpp::Named("sigmasq") = sigmasq_out,
-      Rcpp::Named("Z_list") = z_list_sexp,
+      Rcpp::Named("gamma") = gamma_out_sexp, Rcpp::Named("eta1") = eta1_out,
+      Rcpp::Named("eta2") = eta2_out, Rcpp::Named("alpha") = alpha_out,
+      Rcpp::Named("sigmasq") = sigmasq_out, Rcpp::Named("Z_list") = z_list_sexp,
       Rcpp::Named("Z_pip_row") = pip_trip["row"],
       Rcpp::Named("Z_pip_col") = pip_trip["col"],
-      Rcpp::Named("Z_pip_val") = pip_trip["val"],
-      Rcpp::Named("p") = p,
+      Rcpp::Named("Z_pip_val") = pip_trip["val"], Rcpp::Named("p") = p,
       Rcpp::Named("n") = n);
 }

@@ -64,9 +64,9 @@
 #' @param eta2_sd   Upper bound for eta2 (dual-eta models, default 0.5).
 #' @param mu_tilde  Auxiliary MRF external field for Moller update
 #'   (default -4).
-#' @param eta1_tilde Auxiliary eta1 coupling (default 0.075).
-#' @param eta2_tilde Auxiliary eta2 coupling (default 0.065).
-#' @param e_eta     Beta prior shape \code{a} for eta (default 2).
+#' @param eta1_tilde Auxiliary eta1 coupling (default 0.5).
+#' @param eta2_tilde Auxiliary eta2 coupling (default 0.5).
+#' @param e_eta     Beta prior shape \code{a} for eta (default 1).
 #' @param f_eta     Beta prior shape \code{b} for eta (default 1).
 #' @param Tmax      Maximum Propp-Wilson doubling time (default 64).
 #' @param proposal_type  Eta proposal kernel: 0 = uniform, 1 = truncated
@@ -173,13 +173,13 @@ bvs_mh <- function(X, y,
                    n_mh_gamma = 3L,
                    eta1_sd = 0.5, eta2_sd = 0.5,
                    mu_tilde = -4,
-                   eta1_tilde = 5, eta2_tilde = 5,
+                   eta1_tilde = 0.5, eta2_tilde = 0.5,
                    e_eta = 1, f_eta = 1,
                    Tmax = 64L,
                    proposal_type = 1L,
                    # GGM SSVS
                    v0_ggm = 0.015^2,
-                   v1_ggm = 50^2*0.015^2,
+                   v1_ggm = 50^2 * 0.015^2,
                    pii_ggm = 0.02,
                    lambda_ggm = 1,
                    # Init (optional)

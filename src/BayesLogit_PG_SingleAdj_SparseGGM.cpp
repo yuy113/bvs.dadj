@@ -1,6 +1,6 @@
 // [[Rcpp::depends(RcppArmadillo)]]
-#include "BayesLogit_Sparse_Helpers.h"
 #include "BayesLogit_BlockPG.h"
+#include "BayesLogit_Sparse_Helpers.h"
 #include <RcppArmadillo.h>
 
 // [[Rcpp::export]]
@@ -15,8 +15,8 @@ Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(
     Rcpp::Nullable<Rcpp::NumericVector> beta_in = R_NilValue,
     Rcpp::Nullable<Rcpp::IntegerVector> gamma_in = R_NilValue,
     double alpha_in = 0.0, bool store_beta = true, bool store_gamma = true,
-    bool store_Z_list = false, bool store_Z_pip = true,
-    int block_size = 1, int pcg_threshold = 500) {
+    bool store_Z_list = false, bool store_Z_pip = true, int block_size = 1,
+    int pcg_threshold = 500) {
   Rcpp::RNGScope scope;
 
   const int n = static_cast<int>(X.n_rows);
@@ -125,8 +125,14 @@ Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(
 
   const int total_iter = niter + burnin;
   for (int iter = 0; iter < total_iter; ++iter) {
-    if (iter > 0 && (iter % 2000) == 0)
+    if (iter > 0 && (iter % 5000) == 0) {
       Rcpp::checkUserInterrupt();
+      int model_size = 0;
+      for (int j = 0; j < p; ++j)
+        model_size += static_cast<int>(gamma[j]);
+      Rcpp::Rcout << "Iter: " << iter << " | Model size: " << model_size
+                  << " | Edges: " << n_edges << " | eta1: " << eta1 << "\n";
+    }
 
     sigmasq = clamp_scalar(sigmasq, SIGMASQ_MIN, SIGMASQ_MAX);
     const double sd_sig = std::sqrt(sigmasq);
@@ -150,8 +156,8 @@ Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(
         bvs_dadj_block::PCGConfig pcg_cfg(1e-6, 200, pcg_threshold);
         arma::vec beta_act;
         bool pcg_ok = bvs_dadj_block::pcg_sample_beta_sparse(
-            beta_act, X, active_idx, omega_pg, kappa, alpha,
-            1.0 / sigmasq, pcg_cfg);
+            beta_act, X, active_idx, omega_pg, kappa, alpha, 1.0 / sigmasq,
+            pcg_cfg);
         if (pcg_ok && static_cast<int>(beta_act.n_elem) == p_act) {
           clamp_vec_inplace(beta_act, -BETA_ABS_MAX, BETA_ABS_MAX);
           beta_vec.zeros();
@@ -188,17 +194,17 @@ Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(
               arma::solve(mb, arma::trimatl(L.t()), rhs,
                           arma::solve_opts::fast + arma::solve_opts::no_approx);
           if (solve_ok) {
-            solve_ok =
-                arma::solve(mb, arma::trimatu(L), mb,
-                            arma::solve_opts::fast + arma::solve_opts::no_approx);
+            solve_ok = arma::solve(mb, arma::trimatu(L), mb,
+                                   arma::solve_opts::fast +
+                                       arma::solve_opts::no_approx);
           }
 
           if (solve_ok) {
             arma::vec zz = arma::randn<arma::vec>(p_act);
             arma::vec pert;
-            solve_ok =
-                arma::solve(pert, arma::trimatu(L), zz,
-                            arma::solve_opts::fast + arma::solve_opts::no_approx);
+            solve_ok = arma::solve(pert, arma::trimatu(L), zz,
+                                   arma::solve_opts::fast +
+                                       arma::solve_opts::no_approx);
             if (solve_ok) {
               arma::vec bd = mb + pert;
               if (finite_vec(bd)) {
@@ -239,7 +245,8 @@ Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(
       auto neigh_fn = [&](int jj, std::function<void(int)> cb) {
         int s = S.col_ptrs[jj], e = S.col_ptrs[jj + 1];
         for (int idx = s; idx < e; ++idx) {
-          if (Z_active_flag[idx]) cb(S.row_idx[idx]);
+          if (Z_active_flag[idx])
+            cb(S.row_idx[idx]);
         }
       };
       auto proposal = bvs_dadj_block::swendsen_wang_single(
@@ -247,11 +254,12 @@ Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(
       auto block = bvs_dadj_block::flatten_clusters(proposal);
       if (!block.empty()) {
         bvs_dadj_block::uncollapsed_gamma_sweep_single_sparse(
-            gamma, beta_vec, Xb, X, y01, alpha, sigmasq, beta0,
-            mu, eta1, block, neigh_fn);
+            gamma, beta_vec, Xb, X, y01, alpha, sigmasq, beta0, mu, eta1, block,
+            neigh_fn);
         // Rebuild active_idx / active_pos
         active_idx.clear();
-        for (int jj = 0; jj < p; ++jj) active_pos[jj] = -1;
+        for (int jj = 0; jj < p; ++jj)
+          active_pos[jj] = -1;
         for (int jj = 0; jj < p; ++jj) {
           if (gamma[jj]) {
             active_pos[jj] = static_cast<int>(active_idx.size());

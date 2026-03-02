@@ -139,7 +139,7 @@ static inline double stable_logistic(double x) {
   return ex / (1.0 + ex);
 }
 
-static double sample_pg(double z, std::mt19937 &rng) {
+[[maybe_unused]] static double sample_pg(double z, std::mt19937 &rng) {
   if (!std::isfinite(z))
     z = 0.0;
   z = std::abs(clamp_scalar(z, -LINPRED_CLIP, LINPRED_CLIP)) * 0.5;
@@ -409,7 +409,7 @@ static void proppwilson_dual_sparse(const ConstSparseS &S,
     result[k] = x_up[k];
 }
 
-static void
+[[maybe_unused]] static void
 proppwilson_dual_sparse(const std::vector<std::vector<int>> &Z_adj,
                         const std::vector<std::vector<int>> &R_fix_adj, int p,
                         double mu, double eta1, double eta2, unsigned int T_max,
@@ -490,7 +490,7 @@ proppwilson_dual_sparse(const std::vector<std::vector<int>> &Z_adj,
     result[k] = x_up[k];
 }
 
-static void moller_update_single_sparse(
+[[maybe_unused]] static void moller_update_single_sparse(
     const ConstSparseS &S, const std::vector<uint8_t> &Z_active_flag, int p,
     double mu, double &eta1, double eta1_sd, double mu_tilde, double eta1_tilde,
     const std::vector<uint8_t> &gamma, double e_eta, double f_eta,
@@ -559,7 +559,7 @@ static void moller_update_single_sparse(
     eta1 = eta1_new;
 }
 
-static void moller_update_dual_sparse(
+[[maybe_unused]] static void moller_update_dual_sparse(
     const ConstSparseS &S, const ConstSparseAdj &R_fix,
     const std::vector<uint8_t> &Z_active_flag, int p, double mu, double &eta1,
     double &eta2, double eta1_sd, double eta2_sd, double mu_tilde,

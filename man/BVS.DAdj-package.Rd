@@ -6,10 +6,14 @@
 \alias{BVS.DAdj-package}
 \title{BVS.DAdj: Bayesian Variable Selection with Dual-Adjacency Network-Informed Ising Priors}
 \description{
-MCMC methods for Bayesian variable selection in logistic regression with Ising/MRF priors informed by graphical model adjacency. Supports Metropolis-Hastings and Polya-Gamma augmented Gibbs sampling with fixed, graphical lasso, and Bayesian GGM adjacency structures. Includes dense and sparse high-dimensional variants with single and dual network priors.
+MCMC methods for Bayesian variable selection with Ising/MRF priors informed by graphical model adjacency. The Metropolis-Hastings sampler supports binary logistic outcomes, continuous Gaussian outcomes, right-censored time-to-event outcomes via Cox partial likelihood, and overdispersed count outcomes via a negative-binomial (Poisson-Gamma) representation; the Polya-Gamma sampler targets binary logistic outcomes. Supports fixed, graphical lasso, and Bayesian GGM adjacency structures with dense and sparse high-dimensional variants under single and dual network priors. Allows additional covariates (z_dat) with coefficients (tau) that are always included in the model and not subject to variable selection.
 
-MCMC tools for Bayesian variable selection in logistic
-  regression with Ising/MRF priors.
+MCMC tools for Bayesian variable selection with Ising/MRF
+  priors. The MH sampler supports binary logistic outcomes, continuous
+  Gaussian outcomes, right-censored time-to-event outcomes via Cox
+  partial likelihood, and overdispersed count outcomes via a
+  negative-binomial (Poisson-Gamma) representation; the PG sampler
+  targets binary logistic outcomes.
 }
 \author{
 \strong{Maintainer}: Yubing Yao \email{yyao@umass.edu}

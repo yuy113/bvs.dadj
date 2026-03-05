@@ -1,6 +1,6 @@
 // [[Rcpp::depends(RcppArmadillo)]]
-#include "BayesLogit_Numerics.h"
 #include "BayesLogit_BlockPG.h"
+#include "BayesLogit_Numerics.h"
 #include <RcppArmadillo.h>
 #include <algorithm>
 #include <cmath>
@@ -35,11 +35,11 @@ static double sample_pg_approx(double z) {
 // Log-likelihood for logistic regression (numerically stable)
 // =============================================================================
 static inline double calc_loglik(const arma::vec &y, const arma::vec &z,
-                                 double alpha) {
+                                 double alpha, const arma::vec &offset) {
   const arma::uword n = y.n_elem;
   double term1 = 0.0, term2 = 0.0;
   for (arma::uword i = 0; i < n; ++i) {
-    double x = alpha + z(i);
+    double x = alpha + z(i) + offset(i);
     term1 += y(i) * x;
     if (x > 0.0)
       term2 += x + std::log1p(std::exp(-x));
@@ -426,15 +426,17 @@ phase_transit_2eta_fixadj(Rcpp::IntegerMatrix R1, Rcpp::IntegerMatrix R2,
 // [[Rcpp::export]]
 Rcpp::List BayesLogit_PG_DualAdj(
     const arma::mat &X, const arma::vec &y, Rcpp::IntegerMatrix R_glasso_int,
-    Rcpp::IntegerMatrix R_fix_int, int niter, int burnin, double mu, double nu0,
-    double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma,
-    double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde,
-    double eta2_tilde, double e_eta, double f_eta, unsigned int T_max,
-    int proposal_type, int thin = 1,
+    Rcpp::IntegerMatrix R_fix_int, const arma::mat &Z_dat, int niter,
+    int burnin, double mu, double nu0, double sigmasq0, double alpha0,
+    double beta0, double h, int n_mh_gamma, double eta1_sd, double eta2_sd,
+    double mu_tilde, double eta1_tilde, double eta2_tilde, double e_eta,
+    double f_eta, unsigned int T_max, int proposal_type, int thin = 1,
     Rcpp::Nullable<Rcpp::NumericVector> beta_in = R_NilValue,
     Rcpp::Nullable<Rcpp::IntegerVector> gamma_in = R_NilValue,
-    double alpha_in = 0.0, double eta1_init = 0.01, double eta2_init = 0.01,
-    double sigmasq_init = 1.0, int block_size = 1, int pcg_threshold = 500) {
+    double alpha_in = 0.0, double tau0 = 0.0, double htau = 1.5,
+    Rcpp::Nullable<Rcpp::NumericVector> tau_in = R_NilValue,
+    double eta1_init = 0.01, double eta2_init = 0.01, double sigmasq_init = 1.0,
+    int block_size = 1, int pcg_threshold = 500) {
   Rcpp::RNGScope scope;
 
   const arma::uword n = X.n_rows;
@@ -451,6 +453,7 @@ Rcpp::List BayesLogit_PG_DualAdj(
   arma::vec eta2_out(n_save);
   arma::vec alpha_out(n_save);
   arma::vec sigmasq_out(n_save);
+  arma::mat tau_out(n_save, Z_dat.n_cols);
 
   // Initialisation
   arma::vec beta(p, arma::fill::zeros);
@@ -467,6 +470,15 @@ Rcpp::List BayesLogit_PG_DualAdj(
   double sigmasq = sigmasq_init;
   double eta1 = eta1_init; // initial eta for R_glasso
   double eta2 = eta2_init; // initial eta for R_fix
+
+  // --- tau (Z_dat covariates) ---
+  const arma::uword ntau = Z_dat.n_cols;
+  arma::vec tau(ntau, arma::fill::zeros);
+  tau.fill(tau0);
+  if (tau_in.isNotNull()) {
+    tau = Rcpp::as<arma::vec>(tau_in);
+  }
+  arma::vec Z_tau = Z_dat * tau;
 
   if ((unsigned int)R_glasso_int.nrow() != p ||
       (unsigned int)R_glasso_int.ncol() != p)
@@ -513,7 +525,7 @@ Rcpp::List BayesLogit_PG_DualAdj(
     // STEP A: Polya-Gamma augmentation + beta / alpha update
     // ==================================================================
     sigmasq = bvs_dadj::clamp_finite(sigmasq, 1e-10, 1e10, 1.0);
-    lin = alpha + X * beta;
+    lin = alpha + X * beta + Z_tau;
     bvs_dadj::sanitize_vec_inplace(lin, -60.0, 60.0, 0.0);
     for (arma::uword i = 0; i < n; ++i)
       omega_pg(i) = sample_pg_approx(lin(i));
@@ -543,7 +555,7 @@ Rcpp::List BayesLogit_PG_DualAdj(
         prec_beta.diag() += 1.0 / sigmasq;
         bvs_dadj::sanitize_sym_mat_inplace(prec_beta, 1e10, 1e-8);
 
-        arma::vec z_star = kappa - omega_pg * alpha;
+        arma::vec z_star = kappa - omega_pg * alpha - omega_pg % Z_tau;
         arma::vec mean_rhs = X_act.t() * z_star;
         bvs_dadj::sanitize_vec_inplace(mean_rhs, -1e12, 1e12, 0.0);
 
@@ -553,8 +565,8 @@ Rcpp::List BayesLogit_PG_DualAdj(
         if (chol_ok) {
           arma::vec m_beta = arma::solve(arma::trimatl(L_prec.t()), mean_rhs,
                                          arma::solve_opts::fast);
-          m_beta =
-              arma::solve(arma::trimatu(L_prec), m_beta, arma::solve_opts::fast);
+          m_beta = arma::solve(arma::trimatu(L_prec), m_beta,
+                               arma::solve_opts::fast);
           bvs_dadj::sanitize_vec_inplace(m_beta, -1e8, 1e8, 0.0);
           arma::vec zz = arma::randn<arma::vec>(p_active);
           arma::vec b_draw = m_beta + arma::solve(arma::trimatu(L_prec), zz,
@@ -575,7 +587,7 @@ Rcpp::List BayesLogit_PG_DualAdj(
       double prec_alpha = sum_omega + 1.0 / (h * sigmasq);
       prec_alpha = bvs_dadj::clamp_finite(prec_alpha, 1e-8, 1e12, 1.0);
       double var_alpha = 1.0 / prec_alpha;
-      arma::vec resid = kappa - omega_pg % (X * beta);
+      arma::vec resid = kappa - omega_pg % (X * beta + Z_tau);
       bvs_dadj::sanitize_vec_inplace(resid, -1e8, 1e8, 0.0);
       double mean_alpha =
           var_alpha * (arma::accu(resid) + alpha0 / (h * sigmasq));
@@ -603,19 +615,20 @@ Rcpp::List BayesLogit_PG_DualAdj(
         }
       };
       auto proposal = bvs_dadj_block::swendsen_wang_dual(
-          gamma_u8, eta1, eta2, (int)p, block_size, neigh_glasso_fn, neigh_fix_fn);
+          gamma_u8, eta1, eta2, (int)p, block_size, neigh_glasso_fn,
+          neigh_fix_fn);
       auto block = bvs_dadj_block::flatten_clusters(proposal);
       if (!block.empty()) {
         z = X * beta;
         bvs_dadj_block::uncollapsed_gamma_sweep_dual(
-            gamma_u8, beta, z, X, y, alpha, sigmasq, beta0,
-            mu, eta1, eta2, block, neigh_glasso_fn, neigh_fix_fn);
+            gamma_u8, beta, z, X, y, alpha, sigmasq, beta0, mu, eta1, eta2,
+            block, neigh_glasso_fn, neigh_fix_fn);
         bvs_dadj_block::uint8_to_gamma(gamma, gamma_u8);
       }
     } else {
       // Original single-variable MH
       z = X * beta;
-      double loglik = calc_loglik(y, z, alpha);
+      double loglik = calc_loglik(y, z, alpha, Z_tau);
       if (!std::isfinite(loglik))
         loglik = -std::numeric_limits<double>::infinity();
       double sd_beta = std::sqrt(sigmasq);
@@ -637,7 +650,7 @@ Rcpp::List BayesLogit_PG_DualAdj(
         arma::vec z_prop = z + (b_prop - b_curr) * X.col(j);
         if (!z_prop.is_finite())
           continue;
-        double ll_prop = calc_loglik(y, z_prop, alpha);
+        double ll_prop = calc_loglik(y, z_prop, alpha, Z_tau);
         if (!std::isfinite(ll_prop))
           continue;
 
@@ -654,7 +667,8 @@ Rcpp::List BayesLogit_PG_DualAdj(
             neigh_fix += gamma(i);
         }
 
-        double ising_diff = diff * (mu + eta1 * neigh_glasso + eta2 * neigh_fix);
+        double ising_diff =
+            diff * (mu + eta1 * neigh_glasso + eta2 * neigh_fix);
 
         double log_ratio = (ll_prop - loglik) + ising_diff;
         if (!std::isfinite(log_ratio))
@@ -669,41 +683,58 @@ Rcpp::List BayesLogit_PG_DualAdj(
       }
     }
 
+    // ===================== STEP B.5: tau Gibbs step =======================
+    if (ntau > 0) {
+      arma::mat Zt_Om = Z_dat.t();
+      Zt_Om.each_row() %= omega_pg.t();
+      arma::mat prec_tau = Zt_Om * Z_dat;
+      prec_tau.diag() += 1.0 / (htau * sigmasq);
+
+      arma::vec z_star_tau = kappa - omega_pg * alpha - omega_pg % (X * beta);
+      arma::vec mean_rhs_tau =
+          Z_dat.t() * z_star_tau +
+          (tau0 / (htau * sigmasq)) * arma::ones<arma::vec>(ntau);
+
+      arma::mat L_tau;
+      bool tau_ok = bvs_dadj::robust_chol_inplace(L_tau, prec_tau);
+      if (tau_ok) {
+        arma::vec m_tau = arma::solve(arma::trimatl(L_tau.t()), mean_rhs_tau,
+                                      arma::solve_opts::fast);
+        m_tau =
+            arma::solve(arma::trimatu(L_tau), m_tau, arma::solve_opts::fast);
+        arma::vec zz_tau = arma::randn<arma::vec>(ntau);
+        arma::vec noise_tau =
+            arma::solve(arma::trimatu(L_tau), zz_tau, arma::solve_opts::fast);
+        tau = m_tau + noise_tau;
+        Z_tau = Z_dat * tau;
+      }
+    }
+
     // ==================================================================
-    // STEP C: sigmasq via log-normal MH
+    // STEP C: sigmasq — exact Inverse-Gamma Gibbs.
+    // The PG logistic likelihood does not depend on sigmasq; the
+    // conjugate IG posterior for the (beta, alpha, tau) priors is exact.
     // ==================================================================
     {
-      sigmasq = bvs_dadj::clamp_finite(sigmasq, 1e-10, 1e10, 1.0);
-      double sig_prop = std::exp(std::log(sigmasq) + R::rnorm(0.0, 0.2));
-      sig_prop = bvs_dadj::clamp_finite(sig_prop, 1e-10, 1e10, sigmasq);
-      double shape = nu0 / 2.0;
-      double scale = sigmasq0 * nu0 / 2.0;
-
-      double lp_sig_curr = -(shape + 1.0) * std::log(sigmasq) - scale / sigmasq;
-      double lp_sig_prop =
-          -(shape + 1.0) * std::log(sig_prop) - scale / sig_prop;
-
       double n_act = static_cast<double>(arma::accu(gamma));
       double ss_b = 0.0;
       if (n_act > 0) {
         arma::uvec act = arma::find(gamma == 1);
         ss_b = arma::accu(arma::square(beta.elem(act) - beta0));
       }
-      double lp_b_c = -0.5 * n_act * std::log(sigmasq) - 0.5 * ss_b / sigmasq;
-      double lp_b_p = -0.5 * n_act * std::log(sig_prop) - 0.5 * ss_b / sig_prop;
-
-      double lp_a_c = -0.5 * std::log(h * sigmasq) -
-                      0.5 * (alpha - alpha0) * (alpha - alpha0) / (h * sigmasq);
-      double lp_a_p = -0.5 * std::log(h * sig_prop) - 0.5 * (alpha - alpha0) *
-                                                          (alpha - alpha0) /
-                                                          (h * sig_prop);
-
-      double log_accept = (lp_sig_prop + lp_b_p + lp_a_p) -
-                          (lp_sig_curr + lp_b_c + lp_a_c) +
-                          std::log(sig_prop / sigmasq);
-
-      if (bvs_dadj::safe_mh_accept(log_accept))
-        sigmasq = sig_prop;
+      double ss_tau = 0.0;
+      for (arma::uword j = 0; j < ntau; ++j) {
+        double d = tau(j) - tau0;
+        ss_tau += d * d;
+      }
+      const double da = alpha - alpha0;
+      const double shape_post =
+          0.5 * nu0 + 0.5 * (n_act + 1.0 + (double)ntau);
+      const double scale_post =
+          0.5 * nu0 * sigmasq0 + 0.5 * (ss_b + da * da / h + ss_tau / htau);
+      const double gdraw = R::rgamma(shape_post, 1.0 / std::max(scale_post, 1e-12));
+      if (std::isfinite(gdraw) && gdraw > 0.0)
+        sigmasq = std::max(1e-10, 1.0 / gdraw);
       sigmasq = bvs_dadj::clamp_finite(sigmasq, 1e-10, 1e10, 1.0);
     }
 
@@ -726,11 +757,13 @@ Rcpp::List BayesLogit_PG_DualAdj(
       eta2_out(idx) = eta2;
       alpha_out(idx) = alpha;
       sigmasq_out(idx) = sigmasq;
+      tau_out.row(idx) = tau.t();
     }
   }
 
   return Rcpp::List::create(
       Rcpp::Named("beta") = beta_out, Rcpp::Named("gamma") = gamma_out,
       Rcpp::Named("eta1") = eta1_out, Rcpp::Named("eta2") = eta2_out,
-      Rcpp::Named("alpha") = alpha_out, Rcpp::Named("sigmasq") = sigmasq_out);
+      Rcpp::Named("alpha") = alpha_out, Rcpp::Named("sigmasq") = sigmasq_out,
+      Rcpp::Named("tau") = tau_out);
 }

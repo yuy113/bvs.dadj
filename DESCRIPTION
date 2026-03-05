@@ -10,16 +10,23 @@ Authors@R: c(
            role = "aut"),
     person("Raji", "Balasubramanian", email = "rbalasub@schoolph.umass.edu",
            role = "aut"))
-Description: MCMC methods for Bayesian variable selection in logistic regression
-    with Ising/MRF priors informed by graphical model adjacency. Supports
-    Metropolis-Hastings and Polya-Gamma augmented Gibbs sampling with fixed,
-    graphical lasso, and Bayesian GGM adjacency structures. Includes dense and
-    sparse high-dimensional variants with single and dual network priors.
+Description: MCMC methods for Bayesian variable selection with Ising/MRF priors
+    informed by graphical model adjacency. The Metropolis-Hastings sampler
+    supports binary logistic outcomes, continuous Gaussian outcomes,
+    right-censored time-to-event outcomes via Cox partial likelihood, and
+    overdispersed count outcomes via a negative-binomial (Poisson-Gamma)
+    representation; the Polya-Gamma sampler targets binary logistic outcomes.
+    Supports fixed, graphical lasso, and Bayesian GGM adjacency structures
+    with dense and sparse high-dimensional variants under single and dual
+    network priors. Allows additional covariates (z_dat) with coefficients
+    (tau) that are always included in the model and not subject to variable
+    selection.
 Depends: R (>= 3.5.0)
 Imports: Rcpp (>= 1.0.0), Matrix, methods, stats, graphics, coda
-Suggests: huge, MASS, testthat (>= 3.0.0), knitr, rmarkdown
+Suggests: huge, MASS, testthat (>= 3.0.0), knitr, rmarkdown, KEGGREST
 LinkingTo: Rcpp, RcppArmadillo
 License: GPL (>= 2)
 Encoding: UTF-8
 RoxygenNote: 7.3.3
 VignetteBuilder: knitr
+Config/testthat/edition: 3

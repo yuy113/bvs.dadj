@@ -6,7 +6,7 @@
 \usage{
 bvs_phase_eta_profile(
   adj,
-  mu = -log(1/0.3 - 1),
+  mu = -log(1/0.1 - 1),
   min_eta = 0,
   max_eta = 1.5,
   step_size = 0.05,

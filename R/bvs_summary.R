@@ -138,11 +138,33 @@ summary.bvs <- function(object, pip_threshold = 0.5,
     )
   }
 
+  # --- tau summary ---
+  tau_summary <- NULL
+  if (!is.null(object$tau) && ncol(object$tau) > 0) {
+    ntau <- ncol(object$tau)
+    tau_mean <- colMeans(object$tau)
+    tau_sd <- apply(object$tau, 2, stats::sd)
+    tau_q <- t(apply(object$tau, 2, quantile, probs = c(0.025, 0.5, 0.975)))
+    tau_summary <- data.frame(
+      Variable = paste0("tau", seq_len(ntau)),
+      Mean = tau_mean,
+      SD = tau_sd,
+      Q2.5 = tau_q[, 1],
+      Median = tau_q[, 2],
+      Q97.5 = tau_q[, 3]
+    )
+    if (requireNamespace("coda", quietly = TRUE)) {
+      tau_ess <- apply(object$tau, 2, function(x) coda::effectiveSize(x))
+      tau_summary$ESS <- tau_ess
+    }
+  }
+
   out <- list(
     pip = pip,
     selected = selected,
     summary_beta = summary_beta,
     summary_alpha = summary_alpha,
+    tau_summary = tau_summary,
     nselected = length(selected),
     sampler = object$sampler,
     adj_type = object$adj_type,
@@ -170,6 +192,11 @@ print.summary.bvs <- function(x, ...) {
   if (!is.null(x$summary_alpha)) {
     cat("\nIntercept (Alpha):\n")
     print(round(x$summary_alpha, 4))
+  }
+
+  if (!is.null(x$tau_summary)) {
+    cat("\nAdditional covariate coefficients (tau):\n")
+    print(x$tau_summary, row.names = FALSE)
   }
 
   if (x$nselected > 0) {
@@ -338,6 +365,17 @@ as.mcmc.bvs <- function(x, vars = NULL, ...) {
     out <- cbind(Alpha = alpha_vec, beta_mat)
   } else {
     out <- beta_mat
+  }
+
+  # Add tau columns if present
+  if (!is.null(x$tau)) {
+    colnames_tau <- paste0("tau", seq_len(ncol(x$tau)))
+    out <- cbind(out, x$tau)
+    if (!is.null(colnames(out))) {
+      # Update colnames to include tau names
+      old_names <- colnames(out)[1:(ncol(out) - ncol(x$tau))]
+      colnames(out) <- c(old_names, colnames_tau)
+    }
   }
 
   # Set column names for beta if not present

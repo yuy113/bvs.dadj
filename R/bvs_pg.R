@@ -34,7 +34,8 @@
 #'   (default \code{FALSE}).  Applicable for \code{adj_type = "ggm"} or
 #'   \code{"ggm_fixed"}.
 #' @param S_ggm Optional sparse GGM scatter matrix. For ultra-sparse mode,
-#'   supply this explicitly for very large \code{p}.
+#'   supply this explicitly for very large \code{p}. For sparse backends with
+#'   \code{p >= 10000}, \code{S_ggm} must be provided.
 #' @param store_beta Logical; in ultra-sparse mode, store beta draws.
 #' @param store_gamma Logical; in ultra-sparse mode, store gamma draws.
 #' @param store_Z_list Logical; in ultra-sparse mode, store per-iteration
@@ -51,7 +52,7 @@
 #' @param sigmasq0  Inverse-Gamma scale for sigma^2 (default 1.5).
 #' @param h         Intercept variance inflation factor (default 1.5).
 #' @param mu        Ising external field controlling sparsity
-#'   (default \code{-log(1/0.3 - 1)}).
+#'   (default \code{-log(1/0.1 - 1)}).
 #' @param alpha0    Prior mean for intercept (default 0).
 #' @param beta0     Prior mean for coefficients (default 0).
 #'
@@ -61,8 +62,8 @@
 #' @param eta2_sd   Upper bound for eta2 (dual-eta models, default 0.5).
 #' @param mu_tilde  Auxiliary MRF external field for Moller update
 #'   (default -4).
-#' @param eta1_tilde Auxiliary eta1 coupling (default 0.5).
-#' @param eta2_tilde Auxiliary eta2 coupling (default 0.5).
+#' @param eta1_tilde Auxiliary eta1 coupling (default 0.075).
+#' @param eta2_tilde Auxiliary eta2 coupling (default 0.065).
 #' @param e_eta     Beta prior shape \code{a} for eta (default 1).
 #' @param f_eta     Beta prior shape \code{b} for eta (default 1).
 #' @param Tmax      Maximum Propp-Wilson doubling time (default 64).
@@ -82,6 +83,15 @@
 #'   active variables exceeds this threshold, use PCG instead of Cholesky for
 #'   beta sampling (default 500).
 #'
+#' @param z_dat      An optional \code{n x q} matrix of additional covariates
+#'   whose regression coefficients (tau) are always included in the model
+#'   (not subject to variable selection). Default \code{NULL} (no extra
+#'   covariates).
+#' @param tau0       Prior mean for tau coefficients (default 0).
+#' @param htau       Tau variance inflation factor: \code{sigmasq_tau = htau * sigmasq}
+#'   (default 1.5).
+#' @param tau_init   Optional initial tau (numeric vector of length \code{ncol(z_dat)}).
+#'
 #' @param beta_init  Optional initial beta (numeric vector of length p).
 #' @param gamma_init Optional initial gamma (integer vector of length p).
 #' @param alpha_init Optional initial intercept (numeric scalar).
@@ -91,6 +101,8 @@
 #'     \item{beta}{Matrix of posterior beta samples (niter x p).}
 #'     \item{gamma}{Posterior gamma samples (dense matrix or sparse list,
 #'       depending on backend/storage options).}
+#'     \item{gamma_pip}{Posterior inclusion probabilities for gamma
+#'       (length p).}
 #'     \item{alpha}{Vector of posterior alpha (intercept) samples.}
 #'     \item{sigmasq}{Vector of posterior sigma^2 samples.}
 #'     \item{eta1}{Vector of eta1 (dynamic or single-graph coupling) samples
@@ -98,9 +110,18 @@
 #'     \item{eta2}{Vector of eta2 (fixed coupling) samples
 #'       (if applicable).}
 #'     \item{Z_list}{List of GGM adjacency snapshots (if applicable).}
+#'     \item{Z_pip}{Posterior edge inclusion probabilities for GGM adjacency
+#'       (if applicable).}
+#'     \item{tau}{Matrix of posterior tau (z_dat coefficient) samples
+#'       (niter x q), or NULL if z_dat was not supplied.}
 #'     \item{call}{The matched call.}
 #'     \item{adj_type}{The adjacency type used.}
 #'     \item{sampler}{Character: \code{"pg"}.}
+#'     \item{niter}{Number of stored post-burn-in iterations.}
+#'     \item{burnin}{Number of burn-in iterations discarded.}
+#'     \item{p}{Number of predictors in \code{X}.}
+#'     \item{ntau}{Number of always-included covariates in \code{z_dat}.}
+#'     \item{n}{Number of observations.}
 #'   }
 #'
 #' @details
@@ -157,7 +178,7 @@ bvs_pg <- function(X, y,
                    glasso_criterion = c("ebic", "ric"),
                    # MCMC control
                    niter = 60000L,
-                   burnin = 20000L,
+                   burnin = 10000L,
                    thin = 1L,
                    # Variable selection priors
                    nu0 = 2, sigmasq0 = 1.5, h = 1.5,
@@ -167,14 +188,14 @@ bvs_pg <- function(X, y,
                    n_mh_gamma = 3L,
                    eta1_sd = 0.5, eta2_sd = 0.5,
                    mu_tilde = -4,
-                   eta1_tilde = 0.5, eta2_tilde = 0.5,
+                   eta1_tilde = 0.075, eta2_tilde = 0.065,
                    e_eta = 1, f_eta = 1,
                    Tmax = 64L,
                    proposal_type = 1L,
                    # GGM SSVS
                    v0_ggm = 0.015^2,
-                   v1_ggm = 50^2 * 0.015^2,
-                   pii_ggm = 0.02,
+                   v1_ggm = NULL,
+                   pii_ggm = NULL,
                    lambda_ggm = 1,
                    # Block update
                    block_size = 1L,
@@ -182,7 +203,11 @@ bvs_pg <- function(X, y,
                    # Init (optional)
                    beta_init = NULL,
                    gamma_init = NULL,
-                   alpha_init = NULL) {
+                   alpha_init = NULL,
+                   z_dat = NULL,
+                   tau0 = 0,
+                   htau = 1.5,
+                   tau_init = NULL) {
   mc <- match.call()
   adj_type <- match.arg(adj_type)
   glasso_criterion <- match.arg(glasso_criterion)
@@ -228,6 +253,19 @@ bvs_pg <- function(X, y,
     }
   }
 
+  # Z_dat defaults
+  z_dat_provided <- !is.null(z_dat)
+  if (!z_dat_provided) {
+    z_dat <- matrix(0, nrow = n, ncol = 1)
+  } else {
+    z_dat <- as.matrix(z_dat)
+    if (nrow(z_dat) != n) stop("nrow(z_dat) must equal nrow(X).")
+  }
+  ntau <- ncol(z_dat)
+  if (is.null(tau_init)) {
+    tau_init <- rep(tau0, ntau)
+  }
+
   # ---- Dispatch ----
   result <- switch(adj_type,
     "fixed" = {
@@ -248,6 +286,7 @@ bvs_pg <- function(X, y,
         thin = as.integer(thin),
         beta_in = beta_init, gamma_in = as.integer(gamma_init),
         alpha_in = alpha_init,
+        Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
         block_size = block_size, pcg_threshold = pcg_threshold
       )
     },
@@ -272,6 +311,7 @@ bvs_pg <- function(X, y,
         thin = as.integer(thin),
         beta_in = beta_init, gamma_in = as.integer(gamma_init),
         alpha_in = alpha_init,
+        Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
         block_size = block_size, pcg_threshold = pcg_threshold
       )
     },
@@ -291,6 +331,7 @@ bvs_pg <- function(X, y,
         thin = as.integer(thin),
         beta_in = beta_init, gamma_in = as.integer(gamma_init),
         alpha_in = alpha_init,
+        Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
         block_size = block_size, pcg_threshold = pcg_threshold
       )
     },
@@ -316,6 +357,7 @@ bvs_pg <- function(X, y,
         thin = as.integer(thin),
         beta_in = beta_init, gamma_in = as.integer(gamma_init),
         alpha_in = alpha_init,
+        Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
         block_size = block_size, pcg_threshold = pcg_threshold
       )
     },
@@ -339,6 +381,7 @@ bvs_pg <- function(X, y,
           thin = as.integer(thin),
           beta_in = beta_init, gamma_in = as.integer(gamma_init),
           alpha_in = alpha_init,
+          Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
           store_beta = isTRUE(store_beta),
           store_gamma = isTRUE(store_gamma),
           store_Z_list = isTRUE(store_Z_list),
@@ -368,6 +411,7 @@ bvs_pg <- function(X, y,
           thin = as.integer(thin),
           beta_in = beta_init, gamma_in = as.integer(gamma_init),
           alpha_in = alpha_init,
+          Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
           block_size = block_size, pcg_threshold = pcg_threshold
         )
       }
@@ -402,6 +446,7 @@ bvs_pg <- function(X, y,
           thin = as.integer(thin),
           beta_in = beta_init, gamma_in = as.integer(gamma_init),
           alpha_in = alpha_init,
+          Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
           store_beta = isTRUE(store_beta),
           store_gamma = isTRUE(store_gamma),
           store_Z_list = isTRUE(store_Z_list),
@@ -433,6 +478,7 @@ bvs_pg <- function(X, y,
           thin = as.integer(thin),
           beta_in = beta_init, gamma_in = as.integer(gamma_init),
           alpha_in = alpha_init,
+          Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
           block_size = block_size, pcg_threshold = pcg_threshold
         )
       }
@@ -440,22 +486,36 @@ bvs_pg <- function(X, y,
   )
 
   # Package result
+  gamma_pip <- result$gamma_pip
+  if (is.null(gamma_pip) && !is.null(result$gamma)) {
+    if (is.matrix(result$gamma)) {
+      gamma_pip <- colMeans(result$gamma)
+    } else if (is.list(result$gamma)) {
+      n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
+      tmp <- list(gamma = result$gamma)
+      tmp <- .reconstruct_gamma_pip(tmp, p, n_save, store_gamma = TRUE)
+      gamma_pip <- tmp$gamma_pip
+    }
+  }
+
   out <- list(
     beta = result$beta,
     gamma = result$gamma,
     alpha = if (!is.null(result$alpha)) as.vector(result$alpha) else NULL,
     sigmasq = if (!is.null(result$sigmasq)) as.vector(result$sigmasq) else NULL,
+    tau = if (z_dat_provided && !is.null(result$tau)) result$tau else NULL,
     eta1 = result$eta1,
     eta2 = result$eta2,
     Z_list = result$Z_list,
     Z_pip = result$Z_pip,
-    gamma_pip = result$gamma_pip,
+    gamma_pip = gamma_pip,
     call = mc,
     adj_type = adj_type,
     sampler = "pg",
     niter = niter,
     burnin = burnin,
     p = p,
+    ntau = ntau,
     n = n
   )
   class(out) <- "bvs"

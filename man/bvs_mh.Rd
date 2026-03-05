@@ -7,6 +7,8 @@
 bvs_mh(
   X,
   y,
+  event = NULL,
+  outcome_type = c("binary", "continuous", "TTE", "count"),
   adj_type = c("fixed", "dual_fixed", "glasso", "glasso_fixed", "ggm", "ggm_fixed"),
   adj_fixed = NULL,
   adj_fixed2 = NULL,
@@ -24,7 +26,7 @@ bvs_mh(
   nu0 = 2,
   sigmasq0 = 1.5,
   h = 1.5,
-  mu = -log(1/0.3 - 1),
+  mu = -log(1/0.1 - 1),
   alpha0 = 0,
   beta0 = 0,
   n_mh_gamma = 3L,
@@ -33,7 +35,7 @@ bvs_mh(
   mu_tilde = -4,
   eta1_tilde = 0.075,
   eta2_tilde = 0.065,
-  e_eta = 2,
+  e_eta = 1,
   f_eta = 1,
   Tmax = 64L,
   proposal_type = 1L,
@@ -43,13 +45,32 @@ bvs_mh(
   lambda_ggm = 1,
   beta_init = NULL,
   gamma_init = NULL,
-  alpha_init = NULL
+  alpha_init = NULL,
+  z_dat = NULL,
+  tau0 = 0,
+  htau = 1.5,
+  tau_init = NULL
 )
 }
 \arguments{
 \item{X}{An \code{n x p} design matrix (numeric).}
 
-\item{y}{A binary response vector of length \code{n} (0/1).}
+\item{y}{Response vector of length \code{n}. For
+\code{outcome_type = "binary"}, values must be in \code{\{0,1\}} or
+\code{\{-1,1\}}. For \code{outcome_type = "continuous"}, values must be
+finite numeric. For \code{outcome_type = "TTE"}, values are survival/event
+times and must be finite and strictly positive. For
+\code{outcome_type = "count"}, values must be finite non-negative integers.}
+
+\item{event}{Event indicator vector of length \code{n} for
+\code{outcome_type = "TTE"} (\code{1}=event, \code{0}=censored; or
+\code{\{-1,1\}} allowed). Ignored for non-TTE outcomes.}
+
+\item{outcome_type}{Character outcome model:
+\code{"binary"} (logistic; default) or \code{"continuous"}
+(Gaussian with conjugate normal-inverse-gamma updates) or \code{"TTE"}
+(Cox partial likelihood for right-censored time-to-event outcomes) or
+\code{"count"} (negative-binomial via Poisson-Gamma augmentation).}
 
 \item{adj_type}{Character string specifying the adjacency structure.
 One of:
@@ -81,7 +102,8 @@ One of:
 \code{"ggm_fixed"}.}
 
 \item{S_ggm}{Optional sparse GGM scatter matrix. For ultra-sparse mode,
-supply this explicitly for very large \code{p}.}
+supply this explicitly for very large \code{p}. For sparse backends with
+\code{p >= 10000}, \code{S_ggm} must be provided.}
 
 \item{store_beta}{Logical; in ultra-sparse mode, store beta draws.}
 
@@ -112,7 +134,7 @@ backends ignore this parameter for computational efficiency.}
 \item{h}{Intercept variance inflation factor (default 1.5).}
 
 \item{mu}{Ising external field controlling sparsity
-(default \code{-log(1/0.3 - 1)}).}
+(default \code{-log(1/0.1 - 1)}).}
 
 \item{alpha0}{Prior mean for intercept (default 0).}
 
@@ -132,7 +154,7 @@ backends ignore this parameter for computational efficiency.}
 
 \item{eta2_tilde}{Auxiliary eta2 coupling (default 0.065).}
 
-\item{e_eta}{Beta prior shape \code{a} for eta (default 2).}
+\item{e_eta}{Beta prior shape \code{a} for eta (default 1).}
 
 \item{f_eta}{Beta prior shape \code{b} for eta (default 1).}
 
@@ -155,6 +177,18 @@ normal (default 1).}
 \item{gamma_init}{Optional initial gamma (integer vector of length p).}
 
 \item{alpha_init}{Optional initial intercept (numeric scalar).}
+
+\item{z_dat}{An optional \code{n x q} matrix of additional covariates
+whose regression coefficients (tau) are always included in the model
+(not subject to variable selection). Default \code{NULL} (no extra
+covariates).}
+
+\item{tau0}{Prior mean for tau coefficients (default 0).}
+
+\item{htau}{Tau variance inflation factor: \code{sigmasq_tau = htau * sigmasq}
+(default 1.5).}
+
+\item{tau_init}{Optional initial tau (numeric vector of length \code{ncol(z_dat)}).}
 }
 \value{
 An object of class \code{"bvs"}, a named list with:
@@ -162,6 +196,8 @@ An object of class \code{"bvs"}, a named list with:
     \item{beta}{Matrix of posterior beta samples (niter x p).}
     \item{gamma}{Posterior gamma samples (dense matrix or sparse list,
       depending on backend/storage options).}
+    \item{gamma_pip}{Posterior inclusion probabilities for gamma
+      (length p).}
     \item{alpha}{Vector of posterior alpha (intercept) samples.}
     \item{sigmasq}{Vector of posterior sigma^2 samples.}
     \item{eta1}{Vector of eta1 (dynamic or single-graph coupling) samples
@@ -169,22 +205,45 @@ An object of class \code{"bvs"}, a named list with:
     \item{eta2}{Vector of eta2 (fixed coupling) samples
       (if applicable).}
     \item{Z_list}{List of GGM adjacency snapshots (if applicable).}
+    \item{Z_pip}{Posterior edge inclusion probabilities for GGM adjacency
+      (if applicable).}
+    \item{tau}{Matrix of posterior tau (z_dat coefficient) samples
+      (niter x q), or NULL if z_dat was not supplied.}
     \item{call}{The matched call.}
     \item{adj_type}{The adjacency type used.}
     \item{sampler}{Character: \code{"mh"}.}
+    \item{outcome_type}{Character outcome model used (\code{"binary"},
+      \code{"continuous"}, \code{"TTE"}, or \code{"count"}).}
+    \item{niter}{Number of stored post-burn-in iterations.}
+    \item{burnin}{Number of burn-in iterations discarded.}
+    \item{p}{Number of predictors in \code{X}.}
+    \item{ntau}{Number of always-included covariates in \code{z_dat}.}
+    \item{n}{Number of observations.}
   }
 }
 \description{
-Bayesian variable selection for logistic regression with an Ising/MRF prior
-on the inclusion indicators gamma, using Metropolis-Hastings updates for
-beta, alpha, and gamma.  The Ising coupling parameter eta is updated via
-Moller et al. (2006) auxiliary variable MH with Propp-Wilson perfect
+Bayesian variable selection with an Ising/MRF prior on the inclusion
+indicators gamma. For \code{outcome_type = "binary"} (default), the model
+uses logistic regression and Metropolis-Hastings updates. For
+\code{outcome_type = "continuous"}, the model uses a Gaussian likelihood
+with conjugate Normal/Inverse-Gamma updates for \code{beta}, \code{alpha},
+\code{tau}, and \code{sigmasq}. For \code{outcome_type = "TTE"}, the model
+uses a Cox proportional hazards partial likelihood (Breslow ties) for
+right-censored time-to-event outcomes. For
+\code{outcome_type = "count"}, the model uses an overdispersed count
+likelihood via a Poisson-Gamma mixture (negative-binomial representation).
+The Ising coupling parameter eta is updated
+via Moller et al. (2006) auxiliary variable MH with Propp-Wilson perfect
 simulation.
 }
 \details{
-The model is:
-\deqn{y_i | X, beta, alpha ~ Bernoulli(logistic(alpha + X_i beta))}
+The outcome model depends on \code{outcome_type}:
+\deqn{y_i | X, beta, alpha, z_i, tau \sim Bernoulli(logistic(alpha + X_i beta + z_i tau)) \quad \text{if binary}}
+\deqn{y_i | X, beta, alpha, z_i, tau, \sigma^2 \sim N(alpha + X_i beta + z_i tau,\sigma^2) \quad \text{if continuous}}
+\deqn{\log L(\beta,\tau) = \sum_{i:\delta_i=1}\left(\eta_i - \log\sum_{j \in \mathcal{R}(t_i)} e^{\eta_j}\right), \ \eta_i = X_i\beta + z_i\tau \quad \text{if TTE}}
+\deqn{y_i | w_i, X, beta, alpha, z_i, tau \sim \mathrm{Poisson}(w_i \exp(\alpha + X_i\beta + z_i\tau)), \ \ w_i \sim \mathrm{Gamma}(r,r) \quad \text{if count}}
 \deqn{beta_j | gamma_j, sigma^2 ~ gamma_j N(0, sigma^2) + (1-gamma_j) delta_0}
+\deqn{tau_k | sigma^2 \sim N(tau0, htau * sigma^2)}
 \deqn{P(gamma | eta, R) propto exp(mu sum(gamma_j) + eta sum_{R} gamma_j gamma_k)}
 
 where R is the adjacency matrix from the chosen \code{adj_type}.
@@ -219,6 +278,34 @@ fit2b <- bvs_mh(X, y,
 
 # Sparse Bayesian GGM adjacency
 fit3 <- bvs_mh(X, y, adj_type = "ggm", sparse = TRUE, niter = 5000)
+
+# Continuous outcome (Gaussian)
+y_cont <- as.numeric(X \%*\% beta_true + rnorm(n, sd = 0.5))
+fit4 <- bvs_mh(
+  X, y_cont,
+  outcome_type = "continuous",
+  adj_type = "fixed", adj_fixed = R,
+  niter = 5000
+)
+
+# Overdispersed count outcome (negative-binomial representation)
+y_count <- rnbinom(n, size = 3, mu = exp(0.4 + as.numeric(X \%*\% beta_true) / 4))
+fit_count <- bvs_mh(
+  X, y_count,
+  outcome_type = "count",
+  adj_type = "fixed", adj_fixed = R,
+  niter = 5000
+)
+
+# Time-to-event outcome (Cox partial likelihood)
+tte_time <- rexp(n, rate = exp(as.numeric(X \%*\% beta_true) / 4))
+tte_event <- rbinom(n, 1, 0.7)
+fit5 <- bvs_mh(
+  X, tte_time,
+  event = tte_event, outcome_type = "TTE",
+  adj_type = "fixed", adj_fixed = R,
+  niter = 5000
+)
 }
 
 }

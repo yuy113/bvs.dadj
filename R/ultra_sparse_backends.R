@@ -26,7 +26,11 @@
   M
 }
 
-.init_ultra_sparse_state <- function(y, p, beta_init, gamma_init, alpha_init) {
+.init_ultra_sparse_state <- function(y, p, beta_init, gamma_init, alpha_init, outcome_type = c("binary", "continuous", "TTE", "count")) {
+  if (is.character(outcome_type) && length(outcome_type) == 1L && identical(outcome_type, "contiousou")) {
+    outcome_type <- "continuous"
+  }
+  outcome_type <- match.arg(outcome_type)
   if (is.null(beta_init)) {
     beta_init <- numeric(p)
   }
@@ -34,13 +38,21 @@
     gamma_init <- integer(p)
   }
   if (is.null(alpha_init)) {
-    y01 <- as.numeric(y)
-    if (all(y01 %in% c(-1, 1))) {
-      y01 <- 0.5 * (y01 + 1)
+    if (outcome_type == "binary") {
+      y01 <- as.numeric(y)
+      if (all(y01 %in% c(-1, 1))) {
+        y01 <- 0.5 * (y01 + 1)
+      }
+      ybar <- mean(y01, na.rm = TRUE)
+      ybar <- min(max(ybar, 1e-4), 1 - 1e-4)
+      alpha_init <- qlogis(ybar)
+    } else if (outcome_type == "count") {
+      alpha_init <- log(mean(as.numeric(y), na.rm = TRUE) + 1e-4)
+    } else if (outcome_type == "TTE") {
+      alpha_init <- 0
+    } else {
+      alpha_init <- mean(as.numeric(y), na.rm = TRUE)
     }
-    ybar <- mean(y01, na.rm = TRUE)
-    ybar <- min(max(ybar, 1e-4), 1 - 1e-4)
-    alpha_init <- qlogis(ybar)
   }
   list(beta_init = beta_init, gamma_init = gamma_init, alpha_init = alpha_init)
 }
@@ -53,11 +65,11 @@
   M - Matrix::Diagonal(n = nrow(M), x = d)
 }
 
-.prepare_sparse_S_triplet <- function(X, S_ggm = NULL, p_max_crossprod = 1e5) {
+.prepare_sparse_S_triplet <- function(X, S_ggm = NULL, p_max_crossprod = 1e4) {
   if (is.null(S_ggm)) {
     p <- ncol(X)
     if (p >= p_max_crossprod) {
-      stop("For large p, provide sparse S_ggm explicitly; crossprod(X) is disabled.")
+      stop("For p >= 10000, provide sparse S_ggm explicitly; crossprod(X) is disabled to protect memory.")
     }
     S_ggm <- Matrix::crossprod(X)
   }
@@ -141,6 +153,11 @@
 }
 
 .reconstruct_gamma_pip <- function(result, p, n_save, store_gamma) {
+  # Prefer gamma_pip already returned directly by C++ (length p numeric vector)
+  if (!is.null(result$gamma_pip) && length(result$gamma_pip) == p) {
+    return(result)
+  }
+  # Fallback: reconstruct from stored gamma list (requires store_gamma=TRUE)
   if (!isTRUE(store_gamma) || !is.list(result$gamma)) {
     result$gamma_pip <- NULL
     return(result)

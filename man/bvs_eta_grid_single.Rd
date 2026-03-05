@@ -8,7 +8,7 @@ bvs_eta_grid_single(
   eta1_sd = NULL,
   adj = NULL,
   eta1_frac = seq(0.2, 1, by = 0.1),
-  mu = -log(1/0.3 - 1),
+  mu = -log(1/0.1 - 1),
   phase_min_eta = 0,
   phase_max_eta = 1.5,
   phase_step_size = 0.05,
@@ -18,7 +18,7 @@ bvs_eta_grid_single(
   eta_cap = 2,
   mu_tilde = -4,
   eta1_tilde = 0.075,
-  e_eta = 2,
+  e_eta = 1,
   f_eta = 1
 )
 }

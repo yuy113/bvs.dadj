@@ -7,7 +7,7 @@
 phase_transition(
   adj,
   adj2 = NULL,
-  mu = -log(1/0.3 - 1),
+  mu = -log(1/0.1 - 1),
   min_eta = 0,
   max_eta = 2,
   step_size = 0.01,
@@ -20,7 +20,7 @@ phase_transition(
 
 \item{adj2}{Optional second adjacency matrix (for dual-eta phase transition).}
 
-\item{mu}{Ising external field (default \code{-log(1/0.3-1)}).}
+\item{mu}{Ising external field (default \code{-log(1/0.1-1)}).}
 
 \item{min_eta}{Minimum eta value (default 0).}
 

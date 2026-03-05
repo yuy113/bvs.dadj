@@ -2,13 +2,14 @@
 
 **Bayesian Variable Selection with Dual-Adjacency Network-Informed Ising Priors**
 
-MCMC methods for Bayesian variable selection in logistic regression with Ising/MRF priors informed by graphical model adjacency matrices. Supports Metropolis-Hastings and Polya-Gamma augmented Gibbs sampling across six adjacency-structure types, with dense and sparse high-dimensional backends.
+MCMC methods for Bayesian variable selection with Ising/MRF priors informed by graphical model adjacency matrices. `bvs_mh()` supports binary logistic outcomes (default), continuous Gaussian outcomes, right-censored time-to-event outcomes via Cox partial likelihood, and overdispersed count outcomes via a negative-binomial (Poisson-Gamma) representation; `bvs_pg()` targets binary logistic outcomes. Both samplers support six adjacency-structure types with dense and sparse high-dimensional backends.
 
 ## Features
 
 | Feature | Description |
 |---|---|
 | **Two MCMC samplers** | Metropolis-Hastings (`bvs_mh`) and Polya-Gamma Gibbs (`bvs_pg`) |
+| **Outcome support** | `bvs_mh`: `outcome_type = "binary"`, `"continuous"`, `"TTE"`, or `"count"`; `bvs_pg`: binary logistic |
 | **Six adjacency types** | `"fixed"`, `"dual_fixed"`, `"glasso"`, `"glasso_fixed"`, `"ggm"`, `"ggm_fixed"` |
 | **Dense & sparse backends** | 12 optimised C++ backends for moderate and high-dimensional settings |
 | **Robust MH acceptance** | `safe_mh_accept()` guards against `log(0)`, NaN, and ±Inf in all MH steps |
@@ -56,6 +57,52 @@ summary(fit)
 plot(fit, type = "pip")
 ```
 
+### Example 1b — MH sampler with continuous outcome
+
+```r
+y_cont <- as.numeric(X %*% beta_true + rnorm(n, sd = 0.5))
+fit_cont <- bvs_mh(
+  X, y_cont,
+  outcome_type = "continuous",
+  adj_type = "fixed", adj_fixed = R,
+  niter = 10000, burnin = 2000
+)
+fit_cont$outcome_type  # "continuous"
+```
+
+### Example 1c — MH sampler with right-censored time-to-event outcome
+
+```r
+# Simulate simple TTE data with random censoring
+linpred <- as.numeric(X %*% beta_true)
+tte_time <- rexp(n, rate = exp(linpred / 4))
+tte_event <- rbinom(n, 1, 0.7)  # 1=event, 0=censored
+
+fit_tte <- bvs_mh(
+  X, tte_time,
+  event = tte_event,
+  outcome_type = "TTE",
+  adj_type = "fixed", adj_fixed = R,
+  niter = 10000, burnin = 2000
+)
+fit_tte$outcome_type  # "TTE"
+```
+
+### Example 1d — MH sampler with overdispersed count outcome
+
+```r
+mu_count <- exp(0.4 + as.numeric(X %*% beta_true) / 4)
+y_count <- rnbinom(n, size = 3, mu = mu_count)
+
+fit_count <- bvs_mh(
+  X, y_count,
+  outcome_type = "count",
+  adj_type = "fixed", adj_fixed = R,
+  niter = 10000, burnin = 2000
+)
+fit_count$outcome_type  # "count"
+```
+
 ### Example 2 — PG Gibbs sampler with graphical lasso adjacency (EBIC)
 
 ```r
@@ -72,6 +119,7 @@ fit <- bvs_pg(X, y, adj_type = "ggm", sparse = TRUE,
 s <- summary(fit)
 s$selected   # indices of selected variables at PIP > 0.5
 s$pip        # full posterior inclusion probability vector
+# For sparse MH backends with p >= 10000, provide S_ggm explicitly.
 ```
 
 ### Example 4 — MH with GGM + fixed adjacency (dual-eta)
@@ -92,7 +140,7 @@ matplot(pt, type = "l", xlab = "eta index", ylab = "model size",
         main = "Ising Phase Transition")
 
 # Build a tuning grid anchored at the phase-transition point
-grid <- bvs_eta_grid_single(adj = R, eta_frac = seq(0.2, 1.0, by = 0.2))
+grid <- bvs_eta_grid_single(adj = R, eta1_frac = seq(0.2, 1.0, by = 0.2))
 head(grid)
 ```
 
@@ -112,6 +160,8 @@ bvs_gelman_diag(list(fit1, fit2))
 
 | Parameter | Default | Description |
 |---|---|---|
+| `outcome_type` | `"binary"` | Outcome model for `bvs_mh`: `"binary"` (logistic), `"continuous"` (Gaussian), `"TTE"` (Cox partial likelihood), or `"count"` (negative-binomial via Poisson-Gamma augmentation) |
+| `event` | `NULL` | Event indicator for `outcome_type = "TTE"` (`1`=event, `0`=censored; `{-1,1}` also accepted); ignored for other outcomes |
 | `niter` | `60000` | Post-burn-in MCMC iterations |
 | `burnin` | `10000` | Burn-in iterations (discarded) |
 | `thin` | `1` | Storage thinning interval |
@@ -122,18 +172,18 @@ bvs_gelman_diag(list(fit1, fit2))
 
 | Parameter | Default | Description |
 |---|---|---|
-| `mu` | `-log(1/0.3 − 1)` | External field (controls baseline sparsity) |
+| `mu` | `-log(1/0.1 − 1)` | External field (controls baseline sparsity) |
 | `eta1_sd` | `0.5` | Upper bound of Uniform prior on η₁ |
 | `eta2_sd` | `0.5` | Upper bound of Uniform prior on η₂ *(dual models)* |
-| `e_eta`, `f_eta` | `2`, `1` | Beta(e, f) prior shape on η |
+| `e_eta`, `f_eta` | `1`, `1` | Beta(e, f) prior shape on η |
 
 ### Möller auxiliary MH
 
 | Parameter | Default | Description |
 |---|---|---|
 | `mu_tilde` | `-4` | Auxiliary MRF external field |
-| `eta1_tilde` | `0.075` | Auxiliary η₁ coupling |
-| `eta2_tilde` | `0.065` | Auxiliary η₂ coupling *(dual models)* |
+| `eta1_tilde` | `0.5` | Auxiliary η₁ coupling |
+| `eta2_tilde` | `0.5` | Auxiliary η₂ coupling *(dual models)* |
 | `Tmax` | `64` | Propp-Wilson maximum doubling horizon |
 | `proposal_type` | `1` | η proposal kernel: `0` = Uniform, `1` = truncated Normal |
 
@@ -143,7 +193,7 @@ bvs_gelman_diag(list(fit1, fit2))
 |---|---|---|
 | `v0_ggm` | `0.015²` | Spike variance |
 | `v1_ggm` | `50² × 0.015²` | Slab variance |
-| `pii_ggm` | `30 / (p − 1)` | Edge inclusion prior probability |
+| `pii_ggm` | `4 / (p − 1)` | Edge inclusion prior probability |
 | `lambda_ggm` | `1` | Prior scale for diagonal precision entries |
 
 ### Regression priors
@@ -152,7 +202,9 @@ bvs_gelman_diag(list(fit1, fit2))
 |---|---|---|
 | `nu0`, `sigmasq0` | `2`, `1.5` | IG(ν₀/2, ν₀σ₀²/2) prior on σ² |
 | `h` | `1.5` | Intercept variance inflation factor |
-| `alpha0`, `beta0` | `0`, `0` | Prior means for intercept and coefficients |
+| `alpha0`, `beta0` | `0`, `0` | Prior means for intercept and regression coefficients `beta` |
+| `tau0` | `0` | Prior mean for regression coefficients `tau` associated with `z_dat` |
+| `htau` | `1.5` | `tau` variance multiplier relative to `sigma^2` |
 
 ## Adjacency Types
 
@@ -196,15 +248,18 @@ Both `bvs_mh()` and `bvs_pg()` return an S3 object of class `"bvs"`:
 |---|---|---|
 | `beta` | matrix or list | Posterior beta samples (`niter × p`, or sparse list) |
 | `gamma` | matrix or list | Posterior gamma samples (`niter × p`, or sparse list) |
-| `gamma_pip` | numeric vector | Posterior inclusion probabilities (length `p`) |
+| `gamma_pip` | numeric vector or `NULL` | Posterior inclusion probabilities (length `p`), or `NULL` when unavailable (for example sparse runs with `store_gamma = FALSE`) |
 | `alpha` | numeric vector | Posterior intercept samples |
 | `sigmasq` | numeric vector | Posterior σ² samples |
+| `tau` | matrix or `NULL` | Posterior samples for always-included covariates (`z_dat`) |
 | `eta1` | numeric vector | Posterior η₁ samples |
 | `eta2` | numeric vector | Posterior η₂ samples *(dual models)* |
 | `Z_list` | list | GGM adjacency snapshots *(if `store_Z_list = TRUE`)* |
 | `Z_pip` | sparse matrix | GGM edge PIPs *(if `store_Z_pip = TRUE`)* |
 | `call` | call | Matched function call |
+| `outcome_type` | character | Present for `bvs_mh` (`"binary"`, `"continuous"`, `"TTE"`, or `"count"`) |
 | `adj_type`, `sampler` | character | Model identifiers |
+| `niter`, `burnin`, `p`, `n`, `ntau` | integer | Stored run dimensions and counts |
 
 Use `summary()`, `print()`, and `plot()` S3 methods for post-processing.
 

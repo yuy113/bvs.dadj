@@ -15,9 +15,17 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
     int n_mh_gamma = 5, int thin = 1,
     Rcpp::Nullable<Rcpp::NumericVector> beta_in = R_NilValue,
     Rcpp::Nullable<Rcpp::IntegerVector> gamma_in = R_NilValue,
-    double alpha_in = 0.0, bool store_beta = true, bool store_gamma = true,
-    bool store_Z_list = false, bool store_Z_pip = true) {
+    double alpha_in = 0.0, const arma::mat &Z_dat = arma::mat(),
+    double tau0 = 0.0, double htau = 1.0,
+    Rcpp::Nullable<Rcpp::NumericVector> tau_in = R_NilValue,
+    bool store_beta = true, bool store_gamma = true, bool store_Z_list = false,
+    bool store_Z_pip = true,
+    Rcpp::Nullable<Rcpp::NumericVector> event = R_NilValue,
+    std::string outcome_type = "binary") {
   Rcpp::RNGScope scope;
+  const bool is_continuous = bvs_dadj::outcome_is_continuous(outcome_type);
+  const bool is_tte = bvs_dadj::outcome_is_tte(outcome_type);
+  const bool is_count = bvs_dadj::outcome_is_count(outcome_type);
 
   const int n = static_cast<int>(X.n_rows);
   const int p = static_cast<int>(X.n_cols);
@@ -28,9 +36,40 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
   if (n_mh_gamma < 1)
     n_mh_gamma = 1;
 
-  arma::vec y01;
-  if (!validate_and_convert_y(y, y01))
-    Rcpp::stop("y must be binary {0,1} or {-1,1}.");
+  arma::vec y_work;
+  arma::uvec y_count;
+  arma::uvec event01;
+  bvs_dadj::CoxBreslowData cox_data;
+  if (is_continuous) {
+    y_work = y;
+    if (!y_work.is_finite())
+      Rcpp::stop("For outcome_type='continuous', y must be finite numeric.");
+  } else if (is_tte) {
+    y_work = y;
+    if (!y_work.is_finite())
+      Rcpp::stop("For outcome_type='TTE', survival times must be finite.");
+    for (int i = 0; i < n; ++i) {
+      if (y_work(i) <= 0.0)
+        Rcpp::stop("For outcome_type='TTE', survival times must be > 0.");
+    }
+    if (event.isNull())
+      Rcpp::stop("For outcome_type='TTE', event indicator must be provided.");
+    arma::vec event_vec = Rcpp::as<arma::vec>(event);
+    if (static_cast<int>(event_vec.n_elem) != n)
+      Rcpp::stop("For outcome_type='TTE', length(event) must match nrow(X).");
+    if (!bvs_dadj::normalize_binary_indicator(event_vec, event01))
+      Rcpp::stop("For outcome_type='TTE', event must be in {0,1} or {-1,1}.");
+    if (arma::accu(event01) < 1u)
+      Rcpp::stop("For outcome_type='TTE', at least one event==1 is required.");
+    cox_data = bvs_dadj::build_cox_breslow_data(y_work, event01);
+  } else if (is_count) {
+    if (!bvs_dadj::normalize_count_response(y, y_count))
+      Rcpp::stop(
+          "For outcome_type='count', y must be non-negative integer counts.");
+  } else {
+    if (!validate_and_convert_y(y, y_work))
+      Rcpp::stop("For outcome_type='binary', y must be in {0,1} or {-1,1}.");
+  }
 
   ConstSparseS S(S_i, S_p_csc, S_x, S_diag, p);
   ConstSparseAdj R_fix(R_fix_i, R_fix_p_csc, p);
@@ -70,6 +109,17 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
   double sigmasq = 1.0;
   double eta1 = std::min(0.01, eta1_sd * 0.5);
   double eta2 = std::min(0.01, eta2_sd * 0.5);
+  if (is_tte)
+    alpha = 0.0;
+
+  // --- tau (Z_dat covariates) ---
+  const arma::uword ntau = Z_dat.n_cols;
+  arma::vec tau(ntau, arma::fill::zeros);
+  tau.fill(tau0);
+  if (tau_in.isNotNull()) {
+    tau = Rcpp::as<arma::vec>(tau_in);
+  }
+  arma::vec Z_tau = Z_dat * tau;
 
   std::vector<uint8_t> Z_active_flag(S.nnz, 1);
   int n_edges = 0;
@@ -82,7 +132,31 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
   }
 
   arma::vec Xb = X * beta_vec;
-  double loglik = calc_loglik_full(y01, Xb, alpha);
+  arma::vec Xb_total = Xb + Z_tau;
+  double loglik = 0.0;
+  const double nb_shape = 1.0;
+  arma::vec w_count;
+  arma::vec log_w_count;
+  if (is_count) {
+    w_count.set_size(n);
+    log_w_count.set_size(n);
+    w_count.fill(1.0);
+    log_w_count.zeros();
+  }
+  bvs_dadj::CoxTracker cox_tracker;
+
+  if (is_continuous) {
+    loglik = calc_loglik_full_gaussian(y_work, Xb_total, alpha, sigmasq);
+  } else if (is_tte) {
+    cox_tracker.init(Xb_total, cox_data);
+    loglik = cox_tracker.get_loglik();
+  } else if (is_count) {
+    refresh_count_latent_gamma(y_count, Xb_total, alpha, nb_shape, w_count,
+                               log_w_count);
+    loglik = calc_loglik_full_count(y_count, Xb_total, alpha, log_w_count);
+  } else {
+    loglik = calc_loglik_full(y_work, Xb_total, alpha);
+  }
 
   arma::mat A_sub;
   arma::vec s_ggm, noise_ggm;
@@ -110,6 +184,9 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
   arma::vec eta2_out(n_save, arma::fill::zeros);
   arma::vec alpha_out(n_save, arma::fill::zeros);
   arma::vec sigmasq_out(n_save, arma::fill::zeros);
+  arma::mat tau_out(n_save, ntau);
+  arma::vec gamma_pip_cnt(p, arma::fill::zeros);
+  int n_post_gamma = 0;
 
   Rcpp::List beta_out_list = store_beta ? Rcpp::List(n_save) : Rcpp::List();
   Rcpp::List gamma_out_list = store_gamma ? Rcpp::List(n_save) : Rcpp::List();
@@ -124,6 +201,26 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
   const arma::uword *row_idx = X.row_indices;
   const double *xvals = X.values;
 
+  std::vector<double> delta_group_W;
+  if (is_tte) {
+    delta_group_W.assign(cox_data.group_start.size(), 0.0);
+  }
+
+  arma::vec resid;
+  // Pre-compute column squared norms for MALA step sizes (all outcomes)
+  arma::vec X_col_sq_sums(p, arma::fill::zeros);
+  for (int j = 0; j < p; ++j) {
+    double sum = 0.0;
+    for (arma::uword idx = col_ptr[j]; idx < col_ptr[j + 1]; ++idx)
+      sum += xvals[idx] * xvals[idx];
+    X_col_sq_sums(j) = sum;
+  }
+  // Gradient residuals for MALA (binary: y-p_hat; count: y-mu_hat)
+  arma::vec mala_resid(n, arma::fill::zeros);
+  if (is_continuous) {
+    resid = y_work - alpha - Xb_total;
+  }
+
   const int total_iter = niter + burnin;
   for (int iter = 0; iter < total_iter; ++iter) {
     if (iter > 0 && (iter % 5000) == 0) {
@@ -137,6 +234,12 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
     }
 
     const double sd_sig = std::sqrt(sigmasq);
+
+    if (is_count) {
+      refresh_count_latent_gamma(y_count, Xb_total, alpha, nb_shape, w_count,
+                                 log_w_count);
+      loglik = calc_loglik_full_count(y_count, Xb_total, alpha, log_w_count);
+    }
 
     ggm_column_sweep_sparse(S, Z_active_flag, p, log_pii, log_1pii, lv0h, lv1h,
                             iv0, iv1, A_sub, s_ggm, noise_ggm, n_edges);
@@ -153,8 +256,20 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
       double b_prop = (g_prop == 1) ? R::rnorm(beta0, sd_sig) : 0.0;
       double db = b_prop - b_curr;
 
-      double ll_diff =
-          column_ll_diff(y01, Xb, alpha, col_ptr, row_idx, xvals, j, db);
+      double ll_diff = 0.0;
+      if (is_continuous) {
+        ll_diff = column_ll_diff_gaussian_resid(
+            resid, X_col_sq_sums(j), col_ptr, row_idx, xvals, j, db, sigmasq);
+      } else if (is_tte) {
+        ll_diff = cox_tracker.propose_diff(col_ptr, row_idx, xvals, j, db,
+                                           delta_group_W);
+      } else if (is_count) {
+        ll_diff = column_ll_diff_count(y_count, Xb_total, alpha, log_w_count,
+                                       col_ptr, row_idx, xvals, j, db);
+      } else {
+        ll_diff = column_ll_diff(y_work, Xb_total, alpha, col_ptr, row_idx,
+                                 xvals, j, db);
+      }
       double neigh_dyn = 0.0;
       int start = S.col_ptrs[j], end = S.col_ptrs[j + 1];
       for (int idx = start; idx < end; ++idx) {
@@ -174,8 +289,18 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
       if (bvs_dadj::safe_mh_accept(lmh)) {
         gamma[j] = static_cast<uint8_t>(g_prop);
         beta_vec(j) = b_prop;
-        loglik += ll_diff;
-        apply_column_update(Xb, col_ptr, row_idx, xvals, j, db);
+        if (is_continuous) {
+          apply_column_update_resid(resid, col_ptr, row_idx, xvals, j, -db);
+          loglik += ll_diff;
+        } else if (is_tte) {
+          cox_tracker.apply_diff(col_ptr, row_idx, xvals, j, db, ll_diff,
+                                 delta_group_W);
+          loglik = cox_tracker.get_loglik();
+        } else {
+          apply_column_update(Xb, col_ptr, row_idx, xvals, j, db);
+          apply_column_update(Xb_total, col_ptr, row_idx, xvals, j, db);
+          loglik += ll_diff;
+        }
         if (g_prop == 1)
           activate_gamma(j, active_idx, active_pos);
         else
@@ -183,71 +308,333 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
       }
     }
 
-    const double sd_beta = 0.1 * sd_sig;
     const int na = static_cast<int>(active_idx.size());
-    for (int k = 0; k < na; ++k) {
-      int j = active_idx[k];
-      double b_curr = beta_vec(j);
-      double b_prop = R::rnorm(b_curr, sd_beta);
-      double db = b_prop - b_curr;
+    if (!is_continuous) {
+      if (is_tte) {
+        // --- Fisher information-scaled RW for TTE (sparse) ---
+        arma::vec cox_H;
+        cox_tracker.compute_H_vec(cox_H);
+        const arma::vec &W_cox = cox_tracker.get_W();
+        for (int k = 0; k < na; ++k) {
+          int j = active_idx[k];
+          double b_curr = beta_vec(j);
+          double I_jj = 0.0;
+          for (arma::uword idx = col_ptr[j]; idx < col_ptr[j + 1]; ++idx) {
+            int i = static_cast<int>(row_idx[idx]);
+            I_jj += xvals[idx] * xvals[idx] * W_cox(i) * cox_H(i);
+          }
+          double step = (I_jj > 1e-12) ? 1.0 / std::sqrt(I_jj) : sd_sig;
+          step = std::min(step, 2.0 * sd_sig);
+          double db = R::rnorm(0.0, step);
+          double b_prop = b_curr + db;
+          double ll_diff = cox_tracker.propose_diff(col_ptr, row_idx, xvals, j,
+                                                    db, delta_group_W);
+          double d_curr = b_curr - beta0;
+          double d_prop = b_prop - beta0;
+          if (bvs_dadj::safe_mh_accept(
+                  ll_diff -
+                  0.5 * (d_prop * d_prop - d_curr * d_curr) / sigmasq)) {
+            beta_vec(j) = b_prop;
+            cox_tracker.apply_diff(col_ptr, row_idx, xvals, j, db, ll_diff,
+                                   delta_group_W);
+            loglik = cox_tracker.get_loglik();
+            cox_tracker.compute_H_vec(cox_H);
+          }
+        }
+      } else {
+        // --- Component-wise sparse MALA for binary and count ---
+        // Refresh mala_resid from current state
+        for (int i = 0; i < n; ++i) {
+          double eta_i = alpha + Xb_total(i);
+          if (is_count) {
+            double mu_i = std::exp(bvs_dadj::clamp_finite(
+                eta_i + log_w_count(i), -50.0, 50.0, 0.0));
+            mala_resid(i) = static_cast<double>(y_count(i)) - mu_i;
+          } else {
+            mala_resid(i) = y_work(i) - 1.0 / (1.0 + std::exp(-eta_i));
+          }
+        }
+        for (int k = 0; k < na; ++k) {
+          int j = active_idx[k];
+          double b_curr = beta_vec(j);
+          double g_j = -(b_curr - beta0) / sigmasq;
+          for (arma::uword idx = col_ptr[j]; idx < col_ptr[j + 1]; ++idx)
+            g_j += xvals[idx] * mala_resid(static_cast<int>(row_idx[idx]));
+          double h_j = std::min(0.5 * sigmasq / (X_col_sq_sums(j) + 1.0), 1.0);
+          double b_prop =
+              b_curr + 0.5 * h_j * g_j + std::sqrt(h_j) * R::rnorm(0.0, 1.0);
+          double db = b_prop - b_curr;
+          double ll_diff = 0.0;
+          double g_j_back = -(b_prop - beta0) / sigmasq;
+          for (arma::uword idx = col_ptr[j]; idx < col_ptr[j + 1]; ++idx) {
+            int i = static_cast<int>(row_idx[idx]);
+            double old_eta = alpha + Xb_total(i);
+            double new_eta = old_eta + db * xvals[idx];
+            if (is_count) {
+              double old_mu = std::exp(bvs_dadj::clamp_finite(
+                  old_eta + log_w_count(i), -50.0, 50.0, 0.0));
+              double new_mu = std::exp(bvs_dadj::clamp_finite(
+                  new_eta + log_w_count(i), -50.0, 50.0, 0.0));
+              ll_diff += (static_cast<double>(y_count(i)) *
+                              (new_eta + log_w_count(i)) -
+                          new_mu) -
+                         (static_cast<double>(y_count(i)) *
+                              (old_eta + log_w_count(i)) -
+                          old_mu);
+              g_j_back +=
+                  (static_cast<double>(y_count(i)) - new_mu) * xvals[idx];
+            } else {
+              double p_new = 1.0 / (1.0 + std::exp(-new_eta));
+              double old_ll =
+                  y_work(i) * old_eta -
+                  (old_eta > 0.0 ? old_eta + std::log1p(std::exp(-old_eta))
+                                 : std::log1p(std::exp(old_eta)));
+              double new_ll =
+                  y_work(i) * new_eta -
+                  (new_eta > 0.0 ? new_eta + std::log1p(std::exp(-new_eta))
+                                 : std::log1p(std::exp(new_eta)));
+              ll_diff += new_ll - old_ll;
+              g_j_back += (y_work(i) - p_new) * xvals[idx];
+            }
+          }
+          double b_back = b_prop + 0.5 * h_j * g_j_back;
+          double d_curr = b_curr - beta0;
+          double d_prop = b_prop - beta0;
+          double lq_fwd =
+              -0.5 * std::pow(b_prop - (b_curr + 0.5 * h_j * g_j), 2) / h_j;
+          double lq_bwd = -0.5 * std::pow(b_curr - b_back, 2) / h_j;
+          double lmh = ll_diff -
+                       0.5 * (d_prop * d_prop - d_curr * d_curr) / sigmasq +
+                       (lq_bwd - lq_fwd);
+          if (bvs_dadj::safe_mh_accept(lmh)) {
+            beta_vec(j) = b_prop;
+            for (arma::uword idx = col_ptr[j]; idx < col_ptr[j + 1]; ++idx) {
+              int i = static_cast<int>(row_idx[idx]);
+              Xb(i) += db * xvals[idx];
+              Xb_total(i) += db * xvals[idx];
+              double new_eta = alpha + Xb_total(i);
+              if (is_count) {
+                double mu_i = std::exp(bvs_dadj::clamp_finite(
+                    new_eta + log_w_count(i), -50.0, 50.0, 0.0));
+                mala_resid(i) = static_cast<double>(y_count(i)) - mu_i;
+              } else {
+                mala_resid(i) = y_work(i) - 1.0 / (1.0 + std::exp(-new_eta));
+              }
+            }
+            loglik += ll_diff;
+          }
+        }
+      }
+    } else {
+      for (int k = 0; k < na; ++k) {
+        int j = active_idx[k];
+        double b_curr = beta_vec(j);
+        arma::uword start = col_ptr[j], end = col_ptr[j + 1];
+        double sum_x_resid = 0.0;
+        for (arma::uword idx = start; idx < end; ++idx) {
+          sum_x_resid += xvals[idx] * resid(row_idx[idx]);
+        }
+        double denom = X_col_sq_sums(j) + 1.0;
+        double mean = (sum_x_resid + b_curr * X_col_sq_sums(j) + beta0) / denom;
+        double b_new = R::rnorm(mean, std::sqrt(sigmasq / denom));
+        double db = b_new - b_curr;
+        if (std::abs(db) > 0.0) {
+          beta_vec(j) = b_new;
+          apply_column_update_resid(resid, col_ptr, row_idx, xvals, j, db);
+        }
+      }
+      loglik = -0.5 * n * std::log(2.0 * M_PI * sigmasq) -
+               0.5 * arma::dot(resid, resid) / sigmasq;
+    }
 
-      double ll_diff =
-          column_ll_diff(y01, Xb, alpha, col_ptr, row_idx, xvals, j, db);
-      double d_curr = b_curr - beta0;
-      double d_prop = b_prop - beta0;
-      double prior_diff = -0.5 * (d_prop * d_prop - d_curr * d_curr) / sigmasq;
-      double lmh = ll_diff + prior_diff;
-
-      if (bvs_dadj::safe_mh_accept(lmh)) {
-        beta_vec(j) = b_prop;
-        loglik += ll_diff;
-        apply_column_update(Xb, col_ptr, row_idx, xvals, j, db);
+    // Alpha — MALA for binary/count; conjugate Gibbs for continuous.
+    {
+      if (!is_continuous && !is_tte) {
+        double sum_resid = 0.0;
+        for (int i = 0; i < n; ++i) {
+          double eta_i = alpha + Xb_total(i);
+          if (is_count) {
+            double mu_i = std::exp(bvs_dadj::clamp_finite(
+                eta_i + log_w_count(i), -50.0, 50.0, 0.0));
+            mala_resid(i) = static_cast<double>(y_count(i)) - mu_i;
+          } else {
+            mala_resid(i) = y_work(i) - 1.0 / (1.0 + std::exp(-eta_i));
+          }
+          sum_resid += mala_resid(i);
+        }
+        double g_alpha = sum_resid - (alpha - alpha0) / (h * sigmasq);
+        double h_alpha =
+            std::min(0.5 * h * sigmasq / ((double)n + 1.0 / h), 1.0);
+        double a_prop = alpha + 0.5 * h_alpha * g_alpha +
+                        std::sqrt(h_alpha) * R::rnorm(0.0, 1.0);
+        double ll_prop_alpha = 0.0;
+        double g_alpha_back = -(a_prop - alpha0) / (h * sigmasq);
+        for (int i = 0; i < n; ++i) {
+          double new_eta = a_prop + Xb_total(i);
+          if (is_count) {
+            double mu_i = std::exp(bvs_dadj::clamp_finite(
+                new_eta + log_w_count(i), -50.0, 50.0, 0.0));
+            ll_prop_alpha +=
+                static_cast<double>(y_count(i)) * (new_eta + log_w_count(i)) -
+                mu_i;
+            g_alpha_back += static_cast<double>(y_count(i)) - mu_i;
+          } else {
+            double p_i = 1.0 / (1.0 + std::exp(-new_eta));
+            ll_prop_alpha +=
+                y_work(i) * new_eta -
+                (new_eta > 0.0 ? new_eta + std::log1p(std::exp(-new_eta))
+                               : std::log1p(std::exp(new_eta)));
+            g_alpha_back += y_work(i) - p_i;
+          }
+        }
+        double a_back = a_prop + 0.5 * h_alpha * g_alpha_back;
+        double d_curr = alpha - alpha0;
+        double d_prop = a_prop - alpha0;
+        double lq_fwd =
+            -0.5 * std::pow(a_prop - (alpha + 0.5 * h_alpha * g_alpha), 2) /
+            h_alpha;
+        double lq_bwd = -0.5 * std::pow(alpha - a_back, 2) / h_alpha;
+        double lmh = (ll_prop_alpha - loglik) -
+                     0.5 * (d_prop * d_prop - d_curr * d_curr) / (h * sigmasq) +
+                     (lq_bwd - lq_fwd);
+        if (bvs_dadj::safe_mh_accept(lmh)) {
+          alpha = a_prop;
+          loglik = ll_prop_alpha;
+          for (int i = 0; i < n; ++i) {
+            double new_eta = alpha + Xb_total(i);
+            if (is_count) {
+              double mu_i = std::exp(bvs_dadj::clamp_finite(
+                  new_eta + log_w_count(i), -50.0, 50.0, 0.0));
+              mala_resid(i) = static_cast<double>(y_count(i)) - mu_i;
+            } else {
+              mala_resid(i) = y_work(i) - 1.0 / (1.0 + std::exp(-new_eta));
+            }
+          }
+        }
+      } else if (is_continuous) {
+        double denom = static_cast<double>(n) + 1.0 / h;
+        double mean =
+            (arma::accu(resid) + alpha * static_cast<double>(n) + alpha0 / h) /
+            denom;
+        double a_new = R::rnorm(mean, std::sqrt(sigmasq / denom));
+        double da = a_new - alpha;
+        if (std::abs(da) > 0.0) {
+          alpha = a_new;
+          resid -= da;
+        }
+        loglik = -0.5 * n * std::log(2.0 * M_PI * sigmasq) -
+                 0.5 * arma::dot(resid, resid) / sigmasq;
       }
     }
 
+    // SigmaSq — exact Inverse-Gamma Gibbs for all outcome types.
+    // For non-continuous outcomes the likelihood does not depend on sigmasq.
     {
-      double a_prop = R::rnorm(alpha, std::sqrt(h * sigmasq));
-      double ll_prop = calc_loglik_full(y01, Xb, a_prop);
-      double d_curr = alpha - alpha0;
-      double d_prop = a_prop - alpha0;
-      double prior_diff =
-          -0.5 * (d_prop * d_prop - d_curr * d_curr) / (h * sigmasq);
-      double lmh = (ll_prop - loglik) + prior_diff;
-      if (bvs_dadj::safe_mh_accept(lmh)) {
-        alpha = a_prop;
-        loglik = ll_prop;
+      if (!is_continuous) {
+        double ss = 0.0;
+        for (int j : active_idx) {
+          double d = beta_vec(j) - beta0;
+          ss += d * d;
+        }
+        double ss_tau = 0.0;
+        for (arma::uword j = 0; j < ntau; ++j) {
+          double d = tau(j) - tau0;
+          ss_tau += d * d;
+        }
+        const double da = alpha - alpha0;
+        const double shape_post =
+            0.5 * nu0 + 0.5 * ((double)active_idx.size() + 1.0 + (double)ntau);
+        const double scale_post =
+            0.5 * nu0 * sigmasq0 + 0.5 * (ss + da * da / h + ss_tau / htau);
+        const double gdraw =
+            R::rgamma(shape_post, 1.0 / std::max(scale_post, 1e-12));
+        if (std::isfinite(gdraw) && gdraw > 0.0)
+          sigmasq = std::max(1e-10, 1.0 / gdraw);
+      } else {
+        double ss_beta = 0.0;
+        for (int j : active_idx) {
+          double d = beta_vec(j) - beta0;
+          ss_beta += d * d;
+        }
+        double ss_tau = 0.0;
+        for (arma::uword j = 0; j < ntau; ++j) {
+          double d = tau(j) - tau0;
+          ss_tau += d * d;
+        }
+        double da = alpha - alpha0;
+        double sse = arma::dot(resid, resid);
+        double shape_post = 0.5 * (nu0 + static_cast<double>(n) +
+                                   static_cast<double>(active_idx.size()) +
+                                   1.0 + static_cast<double>(ntau));
+        double scale_post = 0.5 * (nu0 * sigmasq0 + sse + ss_beta +
+                                   da * da / h + ss_tau / htau);
+        double gdraw = R::rgamma(shape_post, 1.0 / scale_post);
+        if (std::isfinite(gdraw) && gdraw > 0.0) {
+          sigmasq = std::max(1e-10, 1.0 / gdraw);
+        }
+        loglik =
+            -0.5 * n * std::log(2.0 * M_PI * sigmasq) - 0.5 * sse / sigmasq;
       }
     }
 
-    {
-      double sig_prop = std::exp(std::log(sigmasq) + R::rnorm(0.0, 0.2));
-      sig_prop = std::max(sig_prop, 1e-10);
-
-      double sh = nu0 / 2.0;
-      double sc = sigmasq0 * nu0 / 2.0;
-      double lp_c = -(sh + 1.0) * std::log(sigmasq) - sc / sigmasq;
-      double lp_p = -(sh + 1.0) * std::log(sig_prop) - sc / sig_prop;
-
-      double ss = 0.0;
-      for (int j : active_idx) {
-        double d = beta_vec(j) - beta0;
-        ss += d * d;
+    // --- Tau MH step ---
+    if (ntau > 0) {
+      if (!is_continuous) {
+        arma::vec tau_prop(ntau);
+        arma::vec Z_tau_prop(n);
+        arma::vec Xb_total_prop(n);
+        for (arma::uword j = 0; j < ntau; ++j) {
+          tau_prop(j) = R::rnorm(tau(j), std::sqrt(htau * sigmasq));
+        }
+        Z_tau_prop = Z_dat * tau_prop;
+        for (arma::uword i = 0; i < n; ++i) {
+          Xb_total_prop(i) = Xb_total(i) - Z_tau(i) + Z_tau_prop(i);
+        }
+        // Full recalculation for tau update since tau modifies the whole linear
+        // predictor
+        double ll_prop = 0.0;
+        if (is_tte) {
+          ll_prop = bvs_dadj::cox_loglik_breslow(Xb_total_prop, cox_data);
+        } else if (is_count) {
+          ll_prop = calc_loglik_full_count(y_count, Xb_total_prop, alpha,
+                                           log_w_count);
+        } else {
+          ll_prop = calc_loglik_full(y_work, Xb_total_prop, alpha);
+        }
+        double pr_curr =
+            -0.5 * arma::accu(arma::square(tau - tau0)) / (htau * sigmasq);
+        double pr_prop =
+            -0.5 * arma::accu(arma::square(tau_prop - tau0)) / (htau * sigmasq);
+        double lmh = (ll_prop - loglik) + (pr_prop - pr_curr);
+        if (bvs_dadj::safe_mh_accept(lmh)) {
+          tau = tau_prop;
+          Z_tau = Z_tau_prop;
+          Xb_total = Xb_total_prop;
+          if (is_tte) {
+            cox_tracker.init(Xb_total, cox_data);
+            loglik = cox_tracker.get_loglik();
+          } else {
+            loglik = ll_prop;
+          }
+        }
+      } else {
+        for (arma::uword j = 0; j < ntau; ++j) {
+          arma::vec zj = Z_dat.col(j);
+          double tj_old = tau(j);
+          double denom = arma::dot(zj, zj) + 1.0 / htau;
+          double sum_z_resid = arma::dot(zj, resid);
+          double mean =
+              (sum_z_resid + tj_old * arma::dot(zj, zj) + tau0 / htau) / denom;
+          double tj_new = R::rnorm(mean, std::sqrt(sigmasq / denom));
+          double dt = tj_new - tj_old;
+          if (std::abs(dt) > 0.0) {
+            tau(j) = tj_new;
+            resid -= dt * zj;
+          }
+        }
+        loglik = -0.5 * n * std::log(2.0 * M_PI * sigmasq) -
+                 0.5 * arma::dot(resid, resid) / sigmasq;
       }
-
-      double n_act = static_cast<double>(active_idx.size());
-      double lb_c = -0.5 * n_act * std::log(sigmasq) - 0.5 * ss / sigmasq;
-      double lb_p = -0.5 * n_act * std::log(sig_prop) - 0.5 * ss / sig_prop;
-
-      double da = alpha - alpha0;
-      double la_c =
-          -0.5 * std::log(h * sigmasq) - 0.5 * da * da / (h * sigmasq);
-      double la_p =
-          -0.5 * std::log(h * sig_prop) - 0.5 * da * da / (h * sig_prop);
-
-      double lmh = (lp_p + lb_p + la_p) - (lp_c + lb_c + la_c) +
-                   std::log(sig_prop / sigmasq);
-      if (bvs_dadj::safe_mh_accept(lmh))
-        sigmasq = sig_prop;
     }
 
     moller_update_dual_sparse(
@@ -261,8 +648,17 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
         alpha_out, sigmasq_out, eta1, eta2, alpha, sigmasq, beta_out_list,
         gamma_out_list, Z_list, edge_r, edge_c);
 
-    if (iter >= burnin)
+    if (iter >= burnin && (iter - burnin) % thin == 0) {
+      int idx = (iter - burnin) / thin;
+      tau_out.row(idx) = tau.t();
+    }
+
+    if (iter >= burnin) {
       accumulate_sparse_pip(S, Z_active_flag, store_Z_pip, Z_pip_cnt);
+      for (int j = 0; j < p; ++j)
+        gamma_pip_cnt(j) += static_cast<double>(gamma[j]);
+      ++n_post_gamma;
+    }
   }
 
   double n_post = static_cast<double>(total_iter - burnin);
@@ -275,11 +671,17 @@ Rcpp::List BayesLogit_DualNet_SparseGGM(
       store_gamma ? static_cast<SEXP>(gamma_out_list) : R_NilValue;
   SEXP z_list_sexp = store_Z_list ? static_cast<SEXP>(Z_list) : R_NilValue;
 
+  arma::vec gamma_pip_out =
+      (n_post_gamma > 0) ? (gamma_pip_cnt / static_cast<double>(n_post_gamma))
+                         : arma::vec(p, arma::fill::zeros);
+
   return Rcpp::List::create(
       Rcpp::Named("beta") = beta_out_sexp,
       Rcpp::Named("gamma") = gamma_out_sexp, Rcpp::Named("eta1") = eta1_out,
       Rcpp::Named("eta2") = eta2_out, Rcpp::Named("alpha") = alpha_out,
-      Rcpp::Named("sigmasq") = sigmasq_out, Rcpp::Named("Z_list") = z_list_sexp,
+      Rcpp::Named("sigmasq") = sigmasq_out, Rcpp::Named("tau") = tau_out,
+      Rcpp::Named("Z_list") = z_list_sexp,
+      Rcpp::Named("gamma_pip") = gamma_pip_out,
       Rcpp::Named("Z_pip_row") = pip_trip["row"],
       Rcpp::Named("Z_pip_col") = pip_trip["col"],
       Rcpp::Named("Z_pip_val") = pip_trip["val"], Rcpp::Named("p") = p,

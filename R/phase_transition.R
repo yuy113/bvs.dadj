@@ -6,7 +6,7 @@
 #'
 #' @param adj  A \code{p x p} binary adjacency matrix.
 #' @param adj2  Optional second adjacency matrix (for dual-eta phase transition).
-#' @param mu  Ising external field (default \code{-log(1/0.3-1)}).
+#' @param mu  Ising external field (default \code{-log(1/0.1-1)}).
 #' @param min_eta  Minimum eta value (default 0).
 #' @param max_eta  Maximum eta value (default 2).
 #' @param step_size  Step size for eta grid (default 0.01).
@@ -33,7 +33,7 @@
 #' @export
 phase_transition <- function(adj,
                              adj2 = NULL,
-                             mu = -log(1/0.3 - 1),
+                             mu = -log(1/0.1 - 1),
                              min_eta = 0,
                              max_eta = 2,
                              step_size = 0.01,

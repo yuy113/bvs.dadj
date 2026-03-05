@@ -203,6 +203,33 @@ static inline double calc_loglik_full(const arma::vec &y, const arma::vec &Xb,
   return ll;
 }
 
+static inline double calc_loglik_full_gaussian(const arma::vec &y,
+                                               const arma::vec &Xb,
+                                               double alpha, double sigmasq) {
+  const int n = static_cast<int>(y.n_elem);
+  const double log_norm =
+      -0.5 * static_cast<double>(n) * std::log(2.0 * M_PI * sigmasq);
+  double sse = 0.0;
+  for (int i = 0; i < n; ++i) {
+    double r = y(i) - (alpha + Xb(i));
+    sse += r * r;
+  }
+  return log_norm - 0.5 * sse / sigmasq;
+}
+
+static inline double calc_loglik_full_count(const arma::uvec &y_count,
+                                            const arma::vec &Xb, double alpha,
+                                            const arma::vec &log_w) {
+  const int n = static_cast<int>(y_count.n_elem);
+  double ll = 0.0;
+  for (int i = 0; i < n; ++i) {
+    const double eta =
+        clamp_scalar(alpha + Xb(i) + log_w(i), -LINPRED_CLIP, LINPRED_CLIP);
+    ll += static_cast<double>(y_count(i)) * eta - std::exp(eta);
+  }
+  return ll;
+}
+
 static inline double column_ll_diff(const arma::vec &y, const arma::vec &Xb,
                                     double alpha, const arma::uword *col_ptr,
                                     const arma::uword *row_idx,
@@ -223,6 +250,94 @@ static inline double column_ll_diff(const arma::vec &y, const arma::vec &Xb,
   return ll_diff;
 }
 
+static inline double column_ll_diff_count(const arma::uvec &y_count,
+                                          const arma::vec &Xb, double alpha,
+                                          const arma::vec &log_w,
+                                          const arma::uword *col_ptr,
+                                          const arma::uword *row_idx,
+                                          const double *xvals, int j,
+                                          double db) {
+  if (std::abs(db) < 1e-16)
+    return 0.0;
+
+  double ll_diff = 0.0;
+  arma::uword start = col_ptr[j];
+  arma::uword end = col_ptr[j + 1];
+  for (arma::uword k = start; k < end; ++k) {
+    int i = static_cast<int>(row_idx[k]);
+    double xij = xvals[k];
+    const double eta_base = alpha + Xb(i) + log_w(i);
+    const double eta_old =
+        clamp_scalar(eta_base, -LINPRED_CLIP, LINPRED_CLIP);
+    const double eta_new =
+        clamp_scalar(eta_base + db * xij, -LINPRED_CLIP, LINPRED_CLIP);
+    ll_diff += static_cast<double>(y_count(i)) * (eta_new - eta_old) -
+               (std::exp(eta_new) - std::exp(eta_old));
+  }
+  return ll_diff;
+}
+
+static inline void refresh_count_latent_gamma(const arma::uvec &y_count,
+                                              const arma::vec &Xb, double alpha,
+                                              double nb_shape,
+                                              arma::vec &w_count,
+                                              arma::vec &log_w) {
+  const arma::uword n = y_count.n_elem;
+  if (Xb.n_elem != n || w_count.n_elem != n || log_w.n_elem != n)
+    Rcpp::stop("Length mismatch in refresh_count_latent_gamma.");
+  for (arma::uword i = 0; i < n; ++i) {
+    const double eta =
+        clamp_scalar(alpha + Xb(i), -LINPRED_CLIP, LINPRED_CLIP);
+    const double mu = std::exp(eta);
+    const double shape_post = nb_shape + static_cast<double>(y_count(i));
+    const double rate_post = nb_shape + mu;
+    double wi = R::rgamma(shape_post, 1.0 / rate_post);
+    if (!std::isfinite(wi) || wi <= 0.0)
+      wi = shape_post / std::max(rate_post, 1e-12);
+    w_count(i) = wi;
+    log_w(i) = std::log(wi);
+  }
+}
+
+static inline double
+column_ll_diff_gaussian(const arma::vec &y, const arma::vec &Xb, double alpha,
+                        const arma::uword *col_ptr, const arma::uword *row_idx,
+                        const double *xvals, int j, double db, double sigmasq) {
+  if (std::abs(db) < 1e-16)
+    return 0.0;
+
+  double ll_diff = 0.0;
+  arma::uword start = col_ptr[j];
+  arma::uword end = col_ptr[j + 1];
+  for (arma::uword k = start; k < end; ++k) {
+    int i = static_cast<int>(row_idx[k]);
+    double xij = xvals[k];
+    double mu_old = alpha + Xb(i);
+    double r_old = y(i) - mu_old;
+    double r_new = r_old - db * xij;
+    ll_diff += -0.5 * (r_new * r_new - r_old * r_old) / sigmasq;
+  }
+  return ll_diff;
+}
+
+static inline double column_ll_diff_gaussian_resid(const arma::vec &resid,
+                                                   const double Xj_sq_sum,
+                                                   const arma::uword *col_ptr,
+                                                   const arma::uword *row_idx,
+                                                   const double *xvals, int j,
+                                                   double db, double sigmasq) {
+  if (std::abs(db) < 1e-16)
+    return 0.0;
+
+  double sum_x_r = 0.0;
+  arma::uword start = col_ptr[j];
+  arma::uword end = col_ptr[j + 1];
+  for (arma::uword k = start; k < end; ++k) {
+    sum_x_r += resid(row_idx[k]) * xvals[k];
+  }
+  return -0.5 * (db * db * Xj_sq_sum - 2.0 * db * sum_x_r) / sigmasq;
+}
+
 static inline void apply_column_update(arma::vec &Xb,
                                        const arma::uword *col_ptr,
                                        const arma::uword *row_idx,
@@ -233,6 +348,19 @@ static inline void apply_column_update(arma::vec &Xb,
   arma::uword end = col_ptr[j + 1];
   for (arma::uword k = start; k < end; ++k)
     Xb(static_cast<int>(row_idx[k])) += db * xvals[k];
+}
+
+static inline void apply_column_update_resid(arma::vec &resid,
+                                             const arma::uword *col_ptr,
+                                             const arma::uword *row_idx,
+                                             const double *xvals, int j,
+                                             double db) {
+  if (std::abs(db) < 1e-16)
+    return;
+  arma::uword start = col_ptr[j];
+  arma::uword end = col_ptr[j + 1];
+  for (arma::uword k = start; k < end; ++k)
+    resid(static_cast<int>(row_idx[k])) -= db * xvals[k];
 }
 
 static void proppwilson_single_sparse(

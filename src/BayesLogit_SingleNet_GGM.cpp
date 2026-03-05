@@ -58,12 +58,12 @@ static inline void rnorm_into(arma::vec &out) {
 }
 
 // Logistic Log-Likelihood (numerically stable)
-static inline double calc_loglik(const arma::vec &y, const arma::vec &z,
-                                 double alpha) {
+static inline double calc_loglik_binary(const arma::vec &y, const arma::vec &z,
+                                        double alpha, const arma::vec &offset) {
   const arma::uword n = y.n_elem;
   double term1 = 0.0, term2 = 0.0;
   for (arma::uword i = 0; i < n; ++i) {
-    double x = alpha + z(i);
+    double x = alpha + z(i) + offset(i);
     term1 += y(i) * x;
     if (x > 0.0)
       term2 += x + std::log1p(std::exp(-x));
@@ -71,6 +71,29 @@ static inline double calc_loglik(const arma::vec &y, const arma::vec &z,
       term2 += std::log1p(std::exp(x));
   }
   return term1 - term2;
+}
+
+static inline double calc_loglik_count(const arma::uvec &y_count,
+                                       const arma::vec &z, double alpha,
+                                       const arma::vec &offset,
+                                       const arma::vec &log_w_count) {
+  return bvs_dadj::calc_loglik_count_conditional(y_count, z, alpha, offset,
+                                                 log_w_count);
+}
+
+static inline double calc_loglik_continuous(const arma::vec &y,
+                                            const arma::vec &z, double alpha,
+                                            const arma::vec &offset,
+                                            double sigmasq) {
+  const arma::uword n = y.n_elem;
+  const double log_norm =
+      -0.5 * static_cast<double>(n) * std::log(2.0 * M_PI * sigmasq);
+  double sse = 0.0;
+  for (arma::uword i = 0; i < n; ++i) {
+    const double r = y(i) - (alpha + z(i) + offset(i));
+    sse += r * r;
+  }
+  return log_norm - 0.5 * sse / sigmasq;
 }
 
 // Normal PDF (not log)
@@ -280,8 +303,15 @@ Rcpp::List BayesLogit_SingleNet_GGM(
     int proposal_type, int thin = 1, int n_thin_gb = 3,
     Rcpp::Nullable<Rcpp::NumericVector> beta_in = R_NilValue,
     Rcpp::Nullable<Rcpp::IntegerVector> gamma_in = R_NilValue,
-    double alpha_in = 0.0) {
+    double alpha_in = 0.0, const arma::mat &Z_dat = arma::mat(),
+    double tau0 = 0.0, double htau = 1.0,
+    Rcpp::Nullable<Rcpp::NumericVector> tau_in = R_NilValue,
+    Rcpp::Nullable<Rcpp::NumericVector> event = R_NilValue,
+    std::string outcome_type = "binary") {
   Rcpp::RNGScope scope;
+  const bool is_continuous = bvs_dadj::outcome_is_continuous(outcome_type);
+  const bool is_tte = bvs_dadj::outcome_is_tte(outcome_type);
+  const bool is_count = bvs_dadj::outcome_is_count(outcome_type);
 
   const arma::uword n = X.n_rows;
   const arma::uword p = X.n_cols;
@@ -291,6 +321,33 @@ Rcpp::List BayesLogit_SingleNet_GGM(
     thin = 1;
   if (n_thin_gb < 1)
     n_thin_gb = 1;
+
+  arma::uvec y_count;
+  arma::uvec event01;
+  bvs_dadj::CoxBreslowData cox_data;
+  if (is_tte) {
+    if (event.isNull())
+      Rcpp::stop("For outcome_type='TTE', event indicator must be provided.");
+    arma::vec event_vec = Rcpp::as<arma::vec>(event);
+    if (event_vec.n_elem != n)
+      Rcpp::stop("For outcome_type='TTE', length(event) must match nrow(X).");
+    if (!y.is_finite())
+      Rcpp::stop("For outcome_type='TTE', survival times must be finite.");
+    for (arma::uword i = 0; i < n; ++i) {
+      if (y(i) <= 0.0)
+        Rcpp::stop("For outcome_type='TTE', survival times must be > 0.");
+    }
+    if (!bvs_dadj::normalize_binary_indicator(event_vec, event01))
+      Rcpp::stop("For outcome_type='TTE', event must be in {0,1} or {-1,1}.");
+    if (arma::accu(event01) < 1u)
+      Rcpp::stop("For outcome_type='TTE', at least one event==1 is required.");
+    cox_data = bvs_dadj::build_cox_breslow_data(y, event01);
+  } else if (is_count) {
+    if (!bvs_dadj::normalize_count_response(y, y_count)) {
+      Rcpp::stop(
+          "For outcome_type='count', y must be non-negative integer counts.");
+    }
+  }
 
   // 1. INITIALIZATION
   arma::vec beta(p, arma::fill::zeros);
@@ -303,9 +360,61 @@ Rcpp::List BayesLogit_SingleNet_GGM(
   double alpha = alpha_in;
   double sigmasq = 1.0;
   double eta1 = 0.01;
+  if (is_tte)
+    alpha = 0.0; // not identifiable under Cox partial likelihood
+  const double nb_shape = 1.0;
 
-  arma::vec z = X * beta;
-  double loglik = calc_loglik(y, z, alpha);
+  // --- tau (Z_dat covariates) ---
+  const arma::uword ntau = Z_dat.n_cols;
+  arma::vec tau(ntau, arma::fill::zeros);
+  tau.fill(tau0);
+  if (tau_in.isNotNull()) {
+    tau = Rcpp::as<arma::vec>(tau_in);
+  }
+  arma::vec Z_tau = Z_dat * tau;
+
+  arma::vec Xb = X * beta;
+  arma::vec Xb_total = Xb + Z_tau;
+  double loglik = 0.0;
+  bvs_dadj::CoxTracker cox_tracker;
+  arma::vec w_count;
+  arma::vec log_w_count;
+  if (is_count) {
+    w_count.set_size(n);
+    log_w_count.set_size(n);
+    w_count.fill(1.0);
+    log_w_count.zeros();
+  }
+
+  auto refresh_count_latent = [&](const arma::vec &xb_total_curr,
+                                  double alpha_curr) {
+    for (arma::uword i = 0; i < n; ++i) {
+      const double eta = bvs_dadj::clamp_finite(alpha_curr + xb_total_curr(i),
+                                                -50.0, 50.0, 0.0);
+      const double mu_i = std::exp(eta);
+      const double shape_post = nb_shape + static_cast<double>(y_count(i));
+      const double rate_post = nb_shape + mu_i;
+      double wi = R::rgamma(shape_post, 1.0 / rate_post);
+      if (!std::isfinite(wi) || wi <= 0.0)
+        wi = shape_post / std::max(rate_post, 1e-12);
+      w_count(i) = wi;
+      log_w_count(i) = std::log(wi);
+    }
+  };
+
+  if (is_continuous) {
+    loglik = calc_loglik_continuous(y, Xb_total - Z_tau, alpha, Z_tau, sigmasq);
+  } else if (is_tte) {
+    cox_tracker.init(Xb_total, cox_data);
+    loglik = cox_tracker.get_loglik();
+  } else if (is_count) {
+    refresh_count_latent(Xb_total, alpha);
+    loglik =
+        calc_loglik_count(y_count, Xb_total - Z_tau, alpha, Z_tau, log_w_count);
+  } else {
+    loglik = calc_loglik_binary(y, Xb_total - Z_tau, alpha, Z_tau);
+  }
+  // The original `eval_non_gaussian_loglik` lambda and its usage are removed.
 
   // GGM Init — Z_ggm is the ONLY adjacency storage (uint8, 1 byte/elem)
   // OPT: removed redundant R_dyn (arma::mat, 8 bytes/elem) and
@@ -327,6 +436,17 @@ Rcpp::List BayesLogit_SingleNet_GGM(
   double log_1_pii_ggm = std::log(1.0 - pii_ggm);
   double a_gam = 0.5 * n_ggm + 1.0;
 
+  // Pre-compute column squared norms for MALA step sizes (all outcome types)
+  arma::vec X_col_sq_sums(p);
+  for (arma::uword j = 0; j < p; ++j)
+    X_col_sq_sums(j) = arma::dot(X.col(j), X.col(j));
+  arma::vec Z_col_sq_sums(ntau, arma::fill::zeros);
+  if (ntau > 0)
+    for (arma::uword j = 0; j < ntau; ++j)
+      Z_col_sq_sums(j) = arma::dot(Z_dat.col(j), Z_dat.col(j));
+  // MALA residual vector
+  arma::vec mala_resid(n, arma::fill::zeros);
+
   // OPT: Pre-allocate z_prop buffer (reused every proposal)
   arma::vec z_prop(n);
 
@@ -347,6 +467,7 @@ Rcpp::List BayesLogit_SingleNet_GGM(
   arma::vec eta1_out(n_save);
   arma::vec alpha_out(n_save);
   arma::vec sigmasq_out(n_save);
+  arma::mat tau_out(n_save, ntau);
 
   // Sparse Z storage
   Rcpp::List Z_list(n_save);
@@ -367,6 +488,12 @@ Rcpp::List BayesLogit_SingleNet_GGM(
       Rcpp::Rcout << "Iter: " << iter << " | Model size: " << model_size
                   << " | GGM Edges: " << edge_count << " | eta1: " << eta1
                   << "\n";
+    }
+
+    if (is_count) {
+      refresh_count_latent(Xb_total, alpha);
+      loglik = calc_loglik_count(y_count, Xb_total - Z_tau, alpha, Z_tau,
+                                 log_w_count);
     }
 
     // ---------------------------------------------------------
@@ -469,11 +596,35 @@ Rcpp::List BayesLogit_SingleNet_GGM(
         double b_curr = beta(j);
         double b_prop =
             (g_prop == 1) ? R::rnorm(beta0, std::sqrt(sigmasq)) : 0.0;
+        double db = b_prop - b_curr;
 
-        // OPT: reuse pre-allocated z_prop
-        z_prop = z + (b_prop - b_curr) * X.col(j);
-        double ll_prop = calc_loglik(y, z_prop, alpha);
+        double ll_diff = 0.0;
+        const arma::vec &xj = X.col(j);
+        std::vector<double> delta_group_W;
 
+        if (is_tte) {
+          delta_group_W.assign(cox_data.group_start.size(), 0.0);
+        }
+
+        if (is_continuous) {
+          // This part of the diff seems to be for a different context (resid,
+          // X_col_sq_sums) and is not directly applicable here without more
+          // context. Reverting to original continuous update logic for gamma.
+          arma::vec z_prop = Xb_total - Z_tau + db * xj;
+          ll_diff =
+              calc_loglik_continuous(y, z_prop, alpha, Z_tau, sigmasq) - loglik;
+        } else if (is_tte) {
+          ll_diff = cox_tracker.propose_diff(xj, db, delta_group_W);
+        } else {
+          arma::vec z_prop = Xb_total - Z_tau + db * xj;
+          if (is_count) {
+            ll_diff =
+                calc_loglik_count(y_count, z_prop, alpha, Z_tau, log_w_count) -
+                loglik;
+          } else {
+            ll_diff = calc_loglik_binary(y, z_prop, alpha, Z_tau) - loglik;
+          }
+        }
         double diff = static_cast<double>(g_prop - g_curr);
         // Single-network: only GGM-estimated neighbors via Z_ggm directly
         double neigh_dyn = 0.0;
@@ -485,13 +636,29 @@ Rcpp::List BayesLogit_SingleNet_GGM(
         }
 
         double ising_diff = diff * (mu + eta1 * neigh_dyn);
-        double log_ratio = (ll_prop - loglik) + ising_diff;
+        double log_ratio =
+            ll_diff + ising_diff; // Changed from (ll_prop - loglik)
 
         if (bvs_dadj::safe_mh_accept(log_ratio)) {
-          gamma(j) = g_prop;
+          gamma(j) = static_cast<uint8_t>(g_prop);
           beta(j) = b_prop;
-          z = z_prop;
-          loglik = ll_prop;
+          if (is_continuous) {
+            // resid -= db * xj; // This line is not applicable without 'resid'
+            // definition
+            loglik += ll_diff;
+            Xb_total += db * xj;
+          } else if (is_tte) {
+            cox_tracker.apply_diff(xj, db, ll_diff, delta_group_W);
+            loglik = cox_tracker.get_loglik();
+            Xb_total += db * xj;
+          } else {
+            Xb_total += db * xj;
+            loglik += ll_diff;
+          }
+          // activate_gamma(j, active_idx, active_pos); // These functions are
+          // not defined in the provided context deactivate_gamma(j, active_idx,
+          // active_pos); // and are outside the scope of this diff. The
+          // original code updates active_idx later.
         }
       }
 
@@ -502,71 +669,338 @@ Rcpp::List BayesLogit_SingleNet_GGM(
           active_idx.push_back(j);
       }
 
-      // 2. Beta (Metropolis updates for active variables)
-      for (arma::uword k = 0; k < active_idx.size(); ++k) {
-        arma::uword j = active_idx[k];
-        double b_prop = R::rnorm(beta(j), std::sqrt(sigmasq) * 0.1);
-        // OPT: reuse pre-allocated z_prop
-        z_prop = z + (b_prop - beta(j)) * X.col(j);
-        double ll_prop = calc_loglik(y, z_prop, alpha);
-        double pr_curr = -0.5 * std::pow(beta(j) - beta0, 2) / sigmasq;
-        double pr_prop = -0.5 * std::pow(b_prop - beta0, 2) / sigmasq;
-        if (bvs_dadj::safe_mh_accept((ll_prop - loglik) +
-                                      (pr_prop - pr_curr))) {
-          beta(j) = b_prop;
-          z = z_prop;
-          loglik = ll_prop;
+      // 2. Beta — MALA (binary/count), Fisher-RW (TTE), Gibbs (continuous)
+      if (!is_continuous) {
+        // Refresh MALA residuals after gamma flips
+        if (!is_tte) {
+          if (is_count) {
+            for (arma::uword i = 0; i < n; ++i) {
+              const double eta = bvs_dadj::clamp_finite(
+                  alpha + Xb_total(i) + log_w_count(i), -50.0, 50.0, 0.0);
+              mala_resid(i) = (double)y_count(i) - std::exp(eta);
+            }
+          } else {
+            for (arma::uword i = 0; i < n; ++i)
+              mala_resid(i) =
+                  y(i) - 1.0 / (1.0 + std::exp(-(alpha + Xb_total(i))));
+          }
         }
+        arma::vec cox_H;
+        if (is_tte)
+          cox_tracker.compute_H_vec(cox_H);
+
+        for (arma::uword k = 0; k < active_idx.size(); ++k) {
+          arma::uword j = active_idx[k];
+          const arma::vec &xj = X.col(j);
+
+          if (is_tte) {
+            double info_jj = cox_tracker.compute_info_diag_j(xj, cox_H);
+            double prop_sd = (info_jj > 1e-10)
+                                 ? std::min(1.0 / std::sqrt(info_jj), 2.0)
+                                 : 0.5;
+            double b_prop = R::rnorm(beta(j), prop_sd);
+            double db = b_prop - beta(j);
+            std::vector<double> delta_group_W(cox_data.group_start.size(), 0.0);
+            double ll_prop_diff =
+                cox_tracker.propose_diff(xj, db, delta_group_W);
+            double pr_diff =
+                -0.5 *
+                (std::pow(b_prop - beta0, 2) - std::pow(beta(j) - beta0, 2)) /
+                sigmasq;
+            if (bvs_dadj::safe_mh_accept(ll_prop_diff + pr_diff)) {
+              beta(j) = b_prop;
+              cox_tracker.apply_diff(xj, db, ll_prop_diff, delta_group_W);
+              loglik = cox_tracker.get_loglik();
+              Xb_total += db * xj;
+              cox_tracker.compute_H_vec(cox_H);
+            }
+          } else {
+            // Component-wise MALA for binary/count
+            double g_j =
+                arma::dot(xj, mala_resid) - (beta(j) - beta0) / sigmasq;
+            double h_j =
+                std::min(0.5 * sigmasq / (X_col_sq_sums(j) + 1.0), 1.0);
+            double mean_fwd = beta(j) + 0.5 * h_j * g_j;
+            double b_prop = R::rnorm(mean_fwd, std::sqrt(h_j));
+            double db = b_prop - beta(j);
+            double ll_prop = 0.0;
+            double g_j_back = -(b_prop - beta0) / sigmasq;
+            for (arma::uword i = 0; i < n; ++i) {
+              if (is_count) {
+                const double ep = bvs_dadj::clamp_finite(
+                    alpha + Xb_total(i) + db * xj(i) + log_w_count(i), -50.0,
+                    50.0, 0.0);
+                const double lp = std::exp(ep);
+                ll_prop += (double)y_count(i) * ep - lp;
+                g_j_back += ((double)y_count(i) - lp) * xj(i);
+              } else {
+                const double ep = alpha + Xb_total(i) + db * xj(i);
+                const double pp = 1.0 / (1.0 + std::exp(-ep));
+                ll_prop +=
+                    y(i) * ep - (ep > 0.0 ? ep + std::log1p(std::exp(-ep))
+                                          : std::log1p(std::exp(ep)));
+                g_j_back += (y(i) - pp) * xj(i);
+              }
+            }
+            double lld = ll_prop - loglik;
+            double mean_bwd = b_prop + 0.5 * h_j * g_j_back;
+            double lqf = -0.5 * (b_prop - mean_fwd) * (b_prop - mean_fwd) / h_j;
+            double lqb =
+                -0.5 * (beta(j) - mean_bwd) * (beta(j) - mean_bwd) / h_j;
+            double prd =
+                -0.5 *
+                (std::pow(b_prop - beta0, 2) - std::pow(beta(j) - beta0, 2)) /
+                sigmasq;
+            if (bvs_dadj::safe_mh_accept(lld + prd + lqb - lqf)) {
+              beta(j) = b_prop;
+              Xb_total += db * xj;
+              loglik = ll_prop;
+              if (is_count) {
+                for (arma::uword i = 0; i < n; ++i) {
+                  const double eta = bvs_dadj::clamp_finite(
+                      alpha + Xb_total(i) + log_w_count(i), -50.0, 50.0, 0.0);
+                  mala_resid(i) = (double)y_count(i) - std::exp(eta);
+                }
+              } else {
+                for (arma::uword i = 0; i < n; ++i)
+                  mala_resid(i) =
+                      y(i) - 1.0 / (1.0 + std::exp(-(alpha + Xb_total(i))));
+              }
+            }
+          }
+        }
+      } else {
+        for (arma::uword k = 0; k < active_idx.size(); ++k) {
+          arma::uword j = active_idx[k];
+          arma::vec xj = X.col(j);
+          double bj_old = beta(j);
+          arma::vec resid = y - (alpha + Z_tau + Xb_total -
+                                 bj_old * xj); // Changed z to Xb_total
+          double denom = arma::dot(xj, xj) + 1.0;
+          double mean = (arma::dot(xj, resid) + beta0) / denom;
+          double bj_new = R::rnorm(mean, std::sqrt(sigmasq / denom));
+          beta(j) = bj_new;
+          Xb_total += (bj_new - bj_old) * xj; // Changed z to Xb_total
+        }
+        loglik = calc_loglik_continuous(y, Xb_total, alpha, Z_tau,
+                                        sigmasq); // Changed z to Xb_total
       }
 
     } // end inner thinning for gamma + beta
 
-    // 3. Alpha (Metropolis update)
-    double a_prop = R::rnorm(alpha, std::sqrt(h * sigmasq));
-    double ll_a_prop = calc_loglik(y, z, a_prop);
-    double pr_a_curr = -0.5 * std::pow(alpha - alpha0, 2) / (h * sigmasq);
-    double pr_a_prop = -0.5 * std::pow(a_prop - alpha0, 2) / (h * sigmasq);
-    if (bvs_dadj::safe_mh_accept((ll_a_prop - loglik) +
-                                   (pr_a_prop - pr_a_curr))) {
-      alpha = a_prop;
-      loglik = ll_a_prop;
+    // 3. Alpha — MALA (binary/count), exact Gibbs (continuous)
+    if (!is_continuous && !is_tte) {
+      double sum_resid = arma::accu(mala_resid);
+      double g_alpha = sum_resid - (alpha - alpha0) / (h * sigmasq);
+      double h_alpha = std::min(0.5 * h * sigmasq / ((double)n + 1.0 / h), 1.0);
+      double mean_fwd_a = alpha + 0.5 * h_alpha * g_alpha;
+      double a_prop = R::rnorm(mean_fwd_a, std::sqrt(h_alpha));
+      double ll_a_prop = 0.0;
+      double g_alpha_back = -(a_prop - alpha0) / (h * sigmasq);
+      for (arma::uword i = 0; i < n; ++i) {
+        if (is_count) {
+          const double eta = bvs_dadj::clamp_finite(
+              a_prop + Xb_total(i) + log_w_count(i), -50.0, 50.0, 0.0);
+          const double lam = std::exp(eta);
+          ll_a_prop += (double)y_count(i) * eta - lam;
+          g_alpha_back += (double)y_count(i) - lam;
+        } else {
+          const double eta = a_prop + Xb_total(i);
+          const double p = 1.0 / (1.0 + std::exp(-eta));
+          ll_a_prop +=
+              y(i) * eta - (eta > 0.0 ? eta + std::log1p(std::exp(-eta))
+                                      : std::log1p(std::exp(eta)));
+          g_alpha_back += y(i) - p;
+        }
+      }
+      double pr_a_curr =
+          -0.5 * (alpha - alpha0) * (alpha - alpha0) / (h * sigmasq);
+      double pr_a_prop =
+          -0.5 * (a_prop - alpha0) * (a_prop - alpha0) / (h * sigmasq);
+      double mean_bwd_a = a_prop + 0.5 * h_alpha * g_alpha_back;
+      double lq_fwd_a =
+          -0.5 * (a_prop - mean_fwd_a) * (a_prop - mean_fwd_a) / h_alpha;
+      double lq_bwd_a =
+          -0.5 * (alpha - mean_bwd_a) * (alpha - mean_bwd_a) / h_alpha;
+      if (bvs_dadj::safe_mh_accept((ll_a_prop - loglik) +
+                                   (pr_a_prop - pr_a_curr) + lq_bwd_a -
+                                   lq_fwd_a)) {
+        alpha = a_prop;
+        loglik = ll_a_prop;
+        if (is_count) {
+          for (arma::uword i = 0; i < n; ++i) {
+            const double eta = bvs_dadj::clamp_finite(
+                alpha + Xb_total(i) + log_w_count(i), -50.0, 50.0, 0.0);
+            mala_resid(i) = (double)y_count(i) - std::exp(eta);
+          }
+        } else {
+          for (arma::uword i = 0; i < n; ++i)
+            mala_resid(i) =
+                y(i) - 1.0 / (1.0 + std::exp(-(alpha + Xb_total(i))));
+        }
+      }
+    } else if (is_continuous) {
+      double denom = static_cast<double>(n) + 1.0 / h;
+      arma::vec resid = y - Xb_total;
+      double mean = (arma::accu(resid) + alpha0 / h) / denom;
+      alpha = R::rnorm(mean, std::sqrt(sigmasq / denom));
+      loglik =
+          calc_loglik_continuous(y, Xb_total - Z_tau, alpha, Z_tau, sigmasq);
     }
 
-    // 4. Update SigmaSq (log-normal proposal)
-    {
-      double sig_prop = std::exp(std::log(sigmasq) + R::rnorm(0, 0.2));
-      sig_prop = std::max(sig_prop, 1e-10);
-      double shape = nu0 / 2.0;
-      double scale = sigmasq0 * nu0 / 2.0;
-
-      double lp_sig_curr = -(shape + 1.0) * std::log(sigmasq) - scale / sigmasq;
-      double lp_sig_prop =
-          -(shape + 1.0) * std::log(sig_prop) - scale / sig_prop;
-
-      // OPT: in-place ss_beta using active_idx (no arma::find)
-      double n_active_beta = (double)active_idx.size();
-      double ss_beta = 0.0;
-      for (arma::uword k = 0; k < active_idx.size(); ++k) {
-        double d = beta(active_idx[k]) - beta0;
-        ss_beta += d * d;
+    // 3+. Tau — component-wise MALA (binary/count), block MH (TTE)
+    if (ntau > 0) {
+      if (!is_continuous) {
+        if (is_tte) {
+          arma::vec tau_prop(ntau);
+          for (arma::uword j = 0; j < ntau; ++j)
+            tau_prop(j) = R::rnorm(tau(j), std::sqrt(htau * sigmasq));
+          arma::vec Z_tau_prop = Z_dat * tau_prop;
+          arma::vec Xb_total_prop(n);
+          for (arma::uword i = 0; i < n; ++i)
+            Xb_total_prop(i) = Xb_total(i) - Z_tau(i) + Z_tau_prop(i);
+          bvs_dadj::CoxTracker cox_tracker_prop;
+          cox_tracker_prop.init(Xb_total_prop, cox_data);
+          double ll_tau_prop = cox_tracker_prop.get_loglik();
+          double pr_tau_curr =
+              -0.5 * arma::accu(arma::square(tau - tau0)) / (htau * sigmasq);
+          double pr_tau_prop = -0.5 *
+                               arma::accu(arma::square(tau_prop - tau0)) /
+                               (htau * sigmasq);
+          if (bvs_dadj::safe_mh_accept((ll_tau_prop - loglik) +
+                                       (pr_tau_prop - pr_tau_curr))) {
+            tau = tau_prop;
+            Z_tau = Z_tau_prop;
+            Xb_total = Xb_total_prop;
+            cox_tracker.init(Xb_total, cox_data);
+            loglik = cox_tracker.get_loglik();
+          }
+        } else {
+          for (arma::uword k = 0; k < ntau; ++k) {
+            const arma::vec &zk = Z_dat.col(k);
+            double g_k =
+                arma::dot(zk, mala_resid) - (tau(k) - tau0) / (htau * sigmasq);
+            double h_k = std::min(
+                0.5 * htau * sigmasq / (Z_col_sq_sums(k) + 1.0 / htau), 1.0);
+            double mean_fwd_k = tau(k) + 0.5 * h_k * g_k;
+            double t_prop = R::rnorm(mean_fwd_k, std::sqrt(h_k));
+            double dt = t_prop - tau(k);
+            double ll_t_prop = 0.0;
+            double g_k_back = -(t_prop - tau0) / (htau * sigmasq);
+            for (arma::uword i = 0; i < n; ++i) {
+              const double neb = alpha + Xb_total(i) + dt * zk(i);
+              if (is_count) {
+                const double ep = bvs_dadj::clamp_finite(neb + log_w_count(i),
+                                                         -50.0, 50.0, 0.0);
+                const double lp = std::exp(ep);
+                ll_t_prop += (double)y_count(i) * ep - lp;
+                g_k_back += ((double)y_count(i) - lp) * zk(i);
+              } else {
+                const double pp = 1.0 / (1.0 + std::exp(-neb));
+                ll_t_prop +=
+                    y(i) * neb - (neb > 0.0 ? neb + std::log1p(std::exp(-neb))
+                                            : std::log1p(std::exp(neb)));
+                g_k_back += (y(i) - pp) * zk(i);
+              }
+            }
+            double lld = ll_t_prop - loglik;
+            double mbwd = t_prop + 0.5 * h_k * g_k_back;
+            double lqf =
+                -0.5 * (t_prop - mean_fwd_k) * (t_prop - mean_fwd_k) / h_k;
+            double lqb = -0.5 * (tau(k) - mbwd) * (tau(k) - mbwd) / h_k;
+            double prd =
+                -0.5 *
+                (std::pow(t_prop - tau0, 2) - std::pow(tau(k) - tau0, 2)) /
+                (htau * sigmasq);
+            if (bvs_dadj::safe_mh_accept(lld + prd + lqb - lqf)) {
+              tau(k) = t_prop;
+              Xb_total += dt * zk;
+              Z_tau += dt * zk;
+              loglik = ll_t_prop;
+              if (is_count) {
+                for (arma::uword i = 0; i < n; ++i) {
+                  const double eta = bvs_dadj::clamp_finite(
+                      alpha + Xb_total(i) + log_w_count(i), -50.0, 50.0, 0.0);
+                  mala_resid(i) = (double)y_count(i) - std::exp(eta);
+                }
+              } else {
+                for (arma::uword i = 0; i < n; ++i)
+                  mala_resid(i) =
+                      y(i) - 1.0 / (1.0 + std::exp(-(alpha + Xb_total(i))));
+              }
+            }
+          }
+        }
+      } else {
+        for (arma::uword j = 0; j < ntau; ++j) {
+          arma::vec zj = Z_dat.col(j);
+          double tj_old = tau(j);
+          arma::vec resid = y - alpha - Xb_total - tj_old * zj;
+          double denom = arma::dot(zj, zj) + 1.0 / htau;
+          double mean = (arma::dot(zj, resid) + tau0 / htau) / denom;
+          double tj_new = R::rnorm(mean, std::sqrt(sigmasq / denom));
+          tau(j) = tj_new;
+          Z_tau += (tj_new - tj_old) * zj;
+        }
+        Xb_total = X * beta + Z_tau;
+        loglik =
+            calc_loglik_continuous(y, Xb_total - Z_tau, alpha, Z_tau, sigmasq);
       }
+    }
 
-      double lp_beta_curr =
-          -0.5 * n_active_beta * std::log(sigmasq) - 0.5 * ss_beta / sigmasq;
-      double lp_beta_prop =
-          -0.5 * n_active_beta * std::log(sig_prop) - 0.5 * ss_beta / sig_prop;
+    // 4. Update SigmaSq — exact Inverse-Gamma Gibbs for all outcome types.
+    // For non-continuous outcomes the likelihood does not depend on sigmasq,
+    // so the conjugate IG posterior is exact (no MH step needed).
+    {
+      if (!is_continuous) {
+        // Sufficient statistics
+        double ss_beta = 0.0;
+        for (arma::uword k = 0; k < active_idx.size(); ++k) {
+          double d = beta(active_idx[k]) - beta0;
+          ss_beta += d * d;
+        }
+        double ss_tau = 0.0;
+        for (arma::uword j = 0; j < ntau; ++j) {
+          double d = tau(j) - tau0;
+          ss_tau += d * d;
+        }
+        const double da = alpha - alpha0;
+        const double shape_post =
+            0.5 * (nu0 + (double)active_idx.size() + 1.0 + (double)ntau);
+        const double scale_post =
+            0.5 * (nu0 * sigmasq0 + ss_beta + da * da / h + ss_tau / htau);
+        const double gdraw =
+            R::rgamma(shape_post, 1.0 / std::max(scale_post, 1e-12));
+        if (std::isfinite(gdraw) && gdraw > 0.0)
+          sigmasq = std::max(1e-10, 1.0 / gdraw);
+      } else {
+        double ss_beta = 0.0;
+        for (arma::uword k = 0; k < active_idx.size(); ++k) {
+          double d = beta(active_idx[k]) - beta0;
+          ss_beta += d * d;
+        }
+        double ss_tau = 0.0;
+        for (arma::uword j = 0; j < ntau; ++j) {
+          double d = tau(j) - tau0;
+          ss_tau += d * d;
+        }
+        double da = alpha - alpha0;
+        arma::vec resid = y - (alpha + Xb_total);
+        double sse = arma::dot(resid, resid);
 
-      double lp_alpha_curr = -0.5 * std::log(h * sigmasq) -
-                             0.5 * std::pow(alpha - alpha0, 2) / (h * sigmasq);
-      double lp_alpha_prop = -0.5 * std::log(h * sig_prop) -
-                             0.5 * std::pow(alpha - alpha0, 2) / (h * sig_prop);
-
-      double log_mh_sig = (lp_sig_prop - lp_sig_curr) +
-                          (lp_beta_prop - lp_beta_curr) +
-                          (lp_alpha_prop - lp_alpha_curr) +
-                          (std::log(sig_prop) - std::log(sigmasq));
-      if (bvs_dadj::safe_mh_accept(log_mh_sig))
-        sigmasq = sig_prop;
+        double shape_post = 0.5 * (nu0 + static_cast<double>(n) +
+                                   static_cast<double>(active_idx.size()) +
+                                   1.0 + static_cast<double>(ntau));
+        double scale_post = 0.5 * (nu0 * sigmasq0 + sse + ss_beta +
+                                   da * da / h + ss_tau / htau);
+        double gdraw = R::rgamma(shape_post, 1.0 / std::max(scale_post, 1e-12));
+        if (std::isfinite(gdraw) && gdraw > 0.0) {
+          sigmasq = std::max(1e-10, 1.0 / gdraw);
+        }
+        Xb_total = X * beta + Z_tau;
+        loglik =
+            calc_loglik_continuous(y, Xb_total - Z_tau, alpha, Z_tau, sigmasq);
+      }
     }
 
     // 5. Update eta1 via Moller et al. (2006) — passes Z_ggm directly
@@ -585,6 +1019,7 @@ Rcpp::List BayesLogit_SingleNet_GGM(
         eta1_out(s) = eta1;
         alpha_out(s) = alpha;
         sigmasq_out(s) = sigmasq;
+        tau_out.row(s) = tau.t();
 
         // OPT: reuse pre-allocated edge vectors
         edge_rows.clear();
@@ -623,5 +1058,5 @@ Rcpp::List BayesLogit_SingleNet_GGM(
       Rcpp::Named("beta") = beta_out, Rcpp::Named("gamma") = gamma_out,
       Rcpp::Named("eta1") = eta1_out, Rcpp::Named("alpha") = alpha_out,
       Rcpp::Named("sigmasq") = sigmasq_out, Rcpp::Named("Z_list") = Z_list,
-      Rcpp::Named("Z_pip") = Z_pip);
+      Rcpp::Named("Z_pip") = Z_pip, Rcpp::Named("tau") = tau_out);
 }

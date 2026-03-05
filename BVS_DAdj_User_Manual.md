@@ -27,7 +27,7 @@ Version 0.1.0 · Yubing Yao, Mahlet Tadesse, Raji Balasubramanian
 
 ## 1. Overview
 
-`BVS.DAdj` is an R package for Bayesian variable selection in logistic regression. It places an **Ising/Markov Random Field (MRF) prior** on the binary inclusion indicators γ, allowing the selection prior to be informed by one or two adjacency (network) matrices that encode prior knowledge about which predictors are likely co-selected.
+`BVS.DAdj` is an R package for Bayesian variable selection with network-informed Ising priors on the binary inclusion indicators γ. The MH sampler (`bvs_mh`) supports binary logistic outcomes (`outcome_type = "binary"`, default), continuous Gaussian outcomes (`outcome_type = "continuous"`), right-censored time-to-event outcomes (`outcome_type = "TTE"`) via Cox's model, and overdispersed count outcomes (`outcome_type = "count"`) via a negative-binomial (Poisson-Gamma) representation. The PG sampler (`bvs_pg`) targets binary logistic outcomes.
 
 The package is designed for:
 
@@ -39,23 +39,36 @@ Two primary MCMC sampling algorithms are provided:
 
 | Function | Algorithm | Beta/alpha update | Typical use |
 |---|---|---|---|
-| `bvs_mh()` | Metropolis-Hastings | Random-walk MH proposal | Flexible; any adjacency type |
+| `bvs_mh()` | Metropolis-Hastings | Binary: random-walk MH; Continuous: conjugate Gibbs | Flexible; any adjacency type |
 | `bvs_pg()` | Pólya-Gamma Gibbs | Exact Gibbs via data augmentation | Improved mixing for beta/alpha |
 
 ---
 
 ## 2. Statistical Model
 
-The likelihood is a logistic regression:
+The outcome likelihood depends on `outcome_type`:
 
 ```
-y_i | X, β, α  ~  Bernoulli( logistic(α + x_i'β) ),   i = 1, …, n
+Binary (`outcome_type = "binary"`):
+y_i | X, β, α, z_i, τ  ~  Bernoulli( logistic(α + x_i'β + z_i'τ) ),   i = 1, …, n
+
+Continuous (`outcome_type = "continuous"`, MH only):
+y_i | X, β, α, z_i, τ, σ²  ~  N( α + x_i'β + z_i'τ, σ² ),   i = 1, …, n
+
+Time-to-event (`outcome_type = "TTE"`, MH only):
+log L(β, τ) = Σ_{i:δ_i=1} [ η_i − log Σ_{j∈R(t_i)} exp(η_j) ],
+η_i = x_i'β + z_i'τ
+
+Count (`outcome_type = "count"`, MH only):
+y_i | w_i, X, β, α, z_i, τ ~ Poisson( w_i · exp(α + x_i'β + z_i'τ) ),
+w_i ~ Gamma(r, r)
 ```
 
 The spike-and-slab prior on coefficients conditional on the inclusion indicator γ:
 
 ```
 β_j | γ_j, σ²  ~  γ_j · N(β₀, σ²)  +  (1 − γ_j) · δ₀
+τ_k | σ²       ~  N(τ₀, h_τ · σ²)
 ```
 
 The Ising MRF prior on the inclusion indicator vector γ:
@@ -82,12 +95,16 @@ Per-iteration steps:
 
 1. **Gamma and beta** (inner loop, repeated `n_thin_gb` times):
    - Propose γ_j flip with β_j drawn from the spike-and-slab prior if activating, or set to 0 if deactivating.
-   - MH accept/reject using the logistic likelihood ratio and Ising prior ratio.
-   - Propose a Random-walk Normal perturbation to each active β_j (continuous update).
-2. **Alpha** — Random-walk Normal MH.
-3. **σ²** — Log-normal random-walk MH.
-4. **η (coupling)** — Möller et al. (2006) auxiliary variable MH with Propp-Wilson perfect simulation to handle the intractable Ising normalising constant.
-5. **GGM adjacency** *(when `adj_type ∈ {"ggm", "ggm_fixed"}`)* — Wang (2012) Bayesian GGM column sweep with spike-and-slab precision priors.
+   - MH accept/reject using the outcome likelihood ratio and Ising prior ratio.
+   - Binary outcome: random-walk MH perturbation of active β_j.
+   - Continuous outcome: conjugate Gaussian Gibbs update for active β_j.
+   - Count outcome: MH update under the conditional Poisson likelihood with per-iteration latent Gamma refresh.
+2. **Alpha, tau, and σ²**
+   - Binary/count outcomes: random-walk MH updates.
+   - Continuous outcome: conjugate Gibbs updates.
+   - TTE outcome: alpha is fixed at 0 (not identifiable under partial likelihood); tau is updated by MH.
+3. **η (coupling)** — Möller et al. (2006) auxiliary variable MH with Propp-Wilson perfect simulation to handle the intractable Ising normalising constant.
+4. **GGM adjacency** *(when `adj_type ∈ {"ggm", "ggm_fixed"}`)* — Wang (2012) Bayesian GGM column sweep with spike-and-slab precision priors.
 
 All MH acceptance steps use the robust `safe_mh_accept()` function (see [Section 6](#6-numerical-robustness-robust-mh-acceptance)).
 
@@ -98,7 +115,7 @@ Per-iteration steps:
 1. **Omega (PG latent variables)** — Sample ω_i ~ PG(1, α + x_i'β) for each observation.
 2. **Beta and alpha** — Exact closed-form Gibbs draw from a multivariate normal, conditioned on ω and γ.
 3. **Gamma (variable selection)** — Reversible-jump MH update for each predictor in random order, using the augmented likelihood.
-4. **σ²** — Log-normal random-walk MH.
+4. **σ²** — Exact Inverse-Gamma Gibbs sample (same conjugate update as in `bvs_mh` continuous mode).
 5. **η** — Möller auxiliary variable MH (same as `bvs_mh`).
 6. **GGM adjacency** *(if applicable)* — Wang (2012) column sweep.
 
@@ -113,11 +130,13 @@ The Pólya-Gamma augmentation makes the beta/alpha update *exact* (no MH), which
 ```r
 bvs_mh(
   X, y,
+  event = NULL,             # required for outcome_type = "TTE" (1=event, 0=censored), ignored otherwise
+  outcome_type = c("binary", "continuous", "TTE", "count"),
   adj_type  = c("fixed", "dual_fixed", "glasso", "glasso_fixed", "ggm", "ggm_fixed"),
   adj_fixed  = NULL,        # p×p binary adjacency matrix (required for fixed types)
   adj_fixed2 = NULL,        # second p×p matrix (required for dual_fixed only)
   sparse     = FALSE,       # TRUE → sparse backend (ggm / ggm_fixed only)
-  S_ggm      = NULL,        # optional pre-computed scatter matrix for ultra-large p
+  S_ggm      = NULL,        # optional pre-computed scatter matrix; required when sparse and p >= 10000
   store_beta    = FALSE,    # (sparse mode) store full beta draws
   store_gamma   = FALSE,    # (sparse mode) store full gamma draws
   store_Z_list  = FALSE,    # (sparse mode) store GGM adjacency snapshots
@@ -132,7 +151,7 @@ bvs_mh(
   nu0      = 2,             # IG shape for σ²
   sigmasq0 = 1.5,           # IG scale for σ²
   h        = 1.5,           # intercept variance inflation factor
-  mu       = -log(1/0.3 - 1), # Ising external field (sparsity)
+  mu       = -log(1/0.1 - 1), # Ising external field (sparsity)
   alpha0   = 0,             # prior mean for intercept
   beta0    = 0,             # prior mean for coefficients
   # --- Gamma / Ising MH ---
@@ -142,7 +161,7 @@ bvs_mh(
   mu_tilde    = -4,         # Möller auxiliary external field
   eta1_tilde  = 0.075,      # Möller auxiliary η₁ coupling
   eta2_tilde  = 0.065,      # Möller auxiliary η₂ coupling (dual models)
-  e_eta = 2, f_eta = 1,     # Beta(e, f) prior shape on η
+  e_eta = 1, f_eta = 1,     # Beta(e, f) prior shape on η
   Tmax  = 64L,              # Propp-Wilson maximum doubling horizon
   proposal_type = 1L,       # η proposal: 0=Uniform, 1=truncated Normal
   # --- GGM SSVS priors ---
@@ -153,11 +172,16 @@ bvs_mh(
   # --- Initialisation ---
   beta_init  = NULL,        # initial beta (length-p numeric vector)
   gamma_init = NULL,        # initial gamma (length-p 0/1 integer vector)
-  alpha_init = NULL         # initial intercept (scalar)
+  alpha_init = NULL,        # initial intercept (scalar)
+  # --- Always-included covariates ---
+  z_dat      = NULL,        # always-included covariates (n×q)
+  tau0       = 0,           # prior mean for tau
+  htau       = 1.5,         # tau variance multiplier relative to sigma^2
+  tau_init   = NULL         # initial tau (length q)
 )
 ```
 
-**Key difference from `bvs_pg`:** The `n_thin_gb` parameter (default `3`) runs `n_thin_gb` MH sub-iterations for gamma and beta at each MCMC step. This effectively provides 3× more mixing for the binary inclusion indicators and continuous coefficients per recorded sample, at the cost of 3× computation for those steps (other parameters — alpha, σ², η — remain one update per iteration). Sparse GGM backends ignore `n_thin_gb` for computational efficiency.
+**Key difference from `bvs_pg`:** The `n_thin_gb` parameter (default `3`) runs `n_thin_gb` inner gamma/beta update sub-iterations per MCMC step in dense MH backends. Sparse GGM backends ignore `n_thin_gb` for computational efficiency.
 
 ### 4.2 `bvs_pg` — Pólya-Gamma Gibbs Sampler
 
@@ -180,21 +204,26 @@ bvs_pg(
   thin   = 1L,
   # --- Variable selection priors ---
   nu0 = 2, sigmasq0 = 1.5, h = 1.5,
-  mu = -log(1/0.3 - 1), alpha0 = 0, beta0 = 0,
+  mu = -log(1/0.1 - 1), alpha0 = 0, beta0 = 0,
   # --- Gamma / Ising MH ---
   n_mh_gamma = 3L,
   eta1_sd = 0.5, eta2_sd = 0.5,
   mu_tilde = -4, eta1_tilde = 0.075, eta2_tilde = 0.065,
-  e_eta = 2, f_eta = 1,
+  e_eta = 1, f_eta = 1,
   Tmax = 64L, proposal_type = 1L,
   # --- GGM SSVS priors ---
   v0_ggm = 0.015^2, v1_ggm = NULL, pii_ggm = NULL, lambda_ggm = 1,
+  # --- Block update ---
+  block_size = 1L, pcg_threshold = 500L,
   # --- Initialisation ---
-  beta_init = NULL, gamma_init = NULL, alpha_init = NULL
+  beta_init = NULL, gamma_init = NULL, alpha_init = NULL,
+  # --- Always-included covariates ---
+  z_dat = NULL, tau0 = 0, htau = 1.5, tau_init = NULL
 )
 ```
 
 `bvs_pg` does not have `n_thin_gb` because the Pólya-Gamma augmentation gives exact Gibbs draws for beta and alpha — repeated proposals are not needed for mixing.
+`bvs_pg` currently models binary outcomes only.
 
 ### 4.3 Return Value
 
@@ -204,16 +233,18 @@ Both functions return an S3 object of class `"bvs"`:
 |---|---|---|
 | `beta` | `niter × p` matrix or list | always (dense) / `store_beta = TRUE` (sparse) |
 | `gamma` | `niter × p` matrix or list | always (dense) / `store_gamma = TRUE` (sparse) |
-| `gamma_pip` | numeric vector, length `p` | always |
+| `gamma_pip` | numeric vector, length `p`, or `NULL` | available when recoverable from stored gamma samples (dense runs and sparse runs with `store_gamma = TRUE`) |
 | `alpha` | numeric vector, length `niter` | always |
 | `sigmasq` | numeric vector, length `niter` | always |
+| `tau` | matrix (`niter × q`) or `NULL` | `z_dat` supplied |
 | `eta1` | numeric vector | single- and dual-network |
 | `eta2` | numeric vector | dual-network models only |
 | `Z_list` | list of sparse adjacency snapshots | `store_Z_list = TRUE` |
 | `Z_pip` | sparse matrix (`p × p`) | `store_Z_pip = TRUE` (GGM types) |
 | `call` | matched call | always |
+| `outcome_type` | character | always for `bvs_mh` |
 | `adj_type`, `sampler` | character | always |
-| `niter`, `burnin`, `p`, `n` | integer | always |
+| `niter`, `burnin`, `p`, `n`, `ntau` | integer | always |
 
 > **Note on short chains:** The toy examples in this manual use very short MCMC chains (`niter = 5`, `burnin = 2`) for quick illustration only. In practice use at least `niter = 20000`, `burnin = 5000` (and more for large `p` or sparse models).
 
@@ -238,6 +269,30 @@ R[1:5, 1:5] <- 1L; diag(R) <- 0L
 fit_mh <- bvs_mh(X, y, adj_type = "fixed", adj_fixed = R,
                  niter = 5, burnin = 2, n_thin_gb = 3L)
 plot(fit_mh, type = "pip")
+```
+
+**Toy Example — `bvs_mh` with continuous outcome:**
+```r
+y_cont <- as.numeric(X %*% beta_true + rnorm(n, sd = 0.5))
+fit_cont <- bvs_mh(
+  X, y_cont,
+  outcome_type = "continuous",
+  adj_type = "fixed", adj_fixed = R,
+  niter = 5, burnin = 2
+)
+fit_cont$outcome_type
+```
+
+**Toy Example — `bvs_mh` with overdispersed count outcome:**
+```r
+y_count <- rnbinom(n, size = 3, mu = exp(0.4 + as.numeric(X %*% beta_true) / 4))
+fit_count <- bvs_mh(
+  X, y_count,
+  outcome_type = "count",
+  adj_type = "fixed", adj_fixed = R,
+  niter = 5, burnin = 2
+)
+fit_count$outcome_type
 ```
 
 **Toy Example — dual-fixed adjacency:**
@@ -300,21 +355,19 @@ The three cases handled:
 
 The classic idiom `std::log(R::runif(0, 1)) < log_ratio` can deadlock if `runif` returns exactly 0 (causing `log(0) = -Inf`, which equals `log_ratio` only if `log_ratio` is also `-Inf` — an edge case that can freeze in degenerate configurations). `safe_mh_accept` eliminates this entirely by working in probability space.
 
-This robustness mechanism is applied to **all** MH steps across all 12 C++ backends:
+This robustness mechanism is applied to MH accept/reject steps across all 12 C++ backends:
 
 - Gamma (variable selection) MH acceptance
-- Beta (regression coefficient) MH acceptance
-- Alpha (intercept) MH acceptance
-- σ² (variance) MH acceptance
+- Beta/alpha/σ² proposal MH acceptance in binary-outcome MH backends
 - η₁ and η₂ (coupling) Möller auxiliary MH acceptance
 
 ---
 
 ## 7. Inner Gamma/Beta Thinning (`n_thin_gb`)
 
-**What it does:** In `bvs_mh()`, the `n_thin_gb` parameter (default `3`) wraps the gamma and beta MH update blocks in an inner `for` loop that runs `n_thin_gb` times per recorded MCMC iteration. Only every `n_thin_gb`-th state of γ and β is kept for inference.
+**What it does:** In `bvs_mh()`, the `n_thin_gb` parameter (default `3`) wraps the inner gamma/beta update blocks in an inner `for` loop that runs `n_thin_gb` times per recorded MCMC iteration. Only every `n_thin_gb`-th state of γ and β is kept for inference.
 
-**Why it helps:** Discrete Bernoulli indicators γ and random-walk beta proposals can mix slowly relative to continuous parameters. Running 3× more proposals per stored sample — while keeping the other parameters (α, σ², η, GGM) at 1 update per stored sample — provides denser exploration of the variable-selection space without inflating the stored output size.
+**Why it helps:** Discrete inclusion indicators γ can mix slowly. Running multiple inner gamma/beta updates per stored sample improves exploration of the variable-selection space without inflating output size. In binary and count modes, these are MH moves; in continuous mode, beta updates are conjugate Gibbs draws.
 
 **Where it applies:** Dense MH backends only:
 
@@ -424,7 +477,7 @@ The package provides a three-stage tuning workflow:
 Locate the **critical coupling strength** η* at which the Ising prior transitions from sparse to dense models for your specific adjacency matrix.
 
 ```r
-pt <- phase_transition(R, mu = -log(1/0.3 - 1),
+pt <- phase_transition(R, mu = -log(1/0.1 - 1),
                        min_eta = 0, max_eta = 1.5,
                        step_size = 0.05, num_rep = 10, Tmax = 64L)
 matplot(pt, type = "l", xlab = "eta step index", ylab = "model size",
@@ -442,7 +495,7 @@ grid1 <- bvs_eta_grid_single(
   eta1_frac   = seq(0.2, 1.0, by = 0.2),  # fractions of eta* to try
   mu_tilde    = c(-4, -5),
   eta1_tilde  = c(0.05, 0.10, 0.15),
-  e_eta       = 2, f_eta = 1
+  e_eta       = 1, f_eta = 1
 )
 head(grid1)
 
@@ -534,7 +587,7 @@ Note: `"glasso"` and `"glasso_fixed"` adjacency types call this function interna
 
 **Rule of thumb:** If `p × n` fits comfortably in memory as a dense double matrix and `p ≤ 1000`, use the dense backend. If `p > 500` and `p ≫ n`, consider `sparse = TRUE` with `S_ggm = prepare_sparse_S(X)`.
 
-For sparse backends, set `store_beta = FALSE` and `store_gamma = FALSE` unless memory permits, and use `gamma_pip` (always computed) as the primary inference target.
+For sparse backends, set `store_beta = FALSE` to reduce memory. If you need `gamma_pip`, keep `store_gamma = TRUE` so PIPs can be reconstructed from stored sparse gamma samples.
 
 ---
 
@@ -595,7 +648,7 @@ R[1:6, 1:6] <- 1L; diag(R) <- 0L
 # Fit
 fit <- bvs_pg(X, y, adj_type = "fixed", adj_fixed = R,
               niter = 20000, burnin = 5000,
-              mu = -log(1/0.3 - 1), eta1_sd = 0.5)
+              mu = -log(1/0.1 - 1), eta1_sd = 0.5)
 
 # Summarise
 s <- summary(fit, pip_threshold = 0.5)
@@ -667,7 +720,7 @@ print(summ_a$summary_beta[1:6, "ESS"])
 
 ```r
 # Stage 1: profile phase transition
-pt <- phase_transition(R, mu = -log(1/0.3 - 1),
+pt <- phase_transition(R, mu = -log(1/0.1 - 1),
                        min_eta = 0, max_eta = 1.5,
                        step_size = 0.05, num_rep = 8L)
 matplot(pt, type = "l", xlab = "eta index", ylab = "model size",
@@ -702,6 +755,8 @@ cat("Best eta_sd:", best$best_row$eta1_sd, "\n")
 
 | Parameter | Default | Function | Description |
 |---|---|---|---|
+| `outcome_type` | `"binary"` | `bvs_mh` only | Outcome model: `"binary"` (logistic), `"continuous"` (Gaussian), `"TTE"` (Cox partial likelihood), or `"count"` (negative-binomial via Poisson-Gamma augmentation) |
+| `event` | `NULL` | `bvs_mh` only | Event indicator for `outcome_type = "TTE"` (`1`=event, `0`=censored; `{-1,1}` accepted), ignored otherwise |
 | `niter` | `60000` | both | Post-burn-in MCMC iterations stored |
 | `burnin` | `10000` | both | Burn-in iterations (discarded) |
 | `thin` | `1` | both | Storage thinning interval |
@@ -715,9 +770,11 @@ cat("Best eta_sd:", best$best_row$eta1_sd, "\n")
 | `nu0` | `2` | IG(ν₀/2, ν₀σ₀²/2) shape for σ² |
 | `sigmasq0` | `1.5` | IG scale for σ² |
 | `h` | `1.5` | Intercept variance inflation (α ~ N(α₀, h·σ²)) |
-| `mu` | `-log(1/0.3 − 1)` | Ising external field (≈ 0.847; prior expected model size ≈ 30% of p) |
+| `mu` | `-log(1/0.1 − 1)` | Ising external field (≈ -2.197; prior expected model size ≈ 10% of p) |
 | `alpha0` | `0` | Prior mean for intercept α |
 | `beta0` | `0` | Prior mean for regression coefficients β_j |
+| `tau0` | `0` | Prior mean for regression coefficients τ associated with `z_dat` |
+| `htau` | `1.5` | τ variance multiplier relative to σ² |
 
 ### Ising / Möller hyperparameters
 
@@ -725,7 +782,7 @@ cat("Best eta_sd:", best$best_row$eta1_sd, "\n")
 |---|---|---|
 | `eta1_sd` | `0.5` | Upper bound Uniform prior on η₁ |
 | `eta2_sd` | `0.5` | Upper bound Uniform prior on η₂ (dual models) |
-| `e_eta`, `f_eta` | `2`, `1` | Beta(e, f) prior shape on η |
+| `e_eta`, `f_eta` | `1`, `1` | Beta(e, f) prior shape on η |
 | `mu_tilde` | `-4` | Möller auxiliary MRF external field |
 | `eta1_tilde` | `0.075` | Möller auxiliary η₁ coupling |
 | `eta2_tilde` | `0.065` | Möller auxiliary η₂ coupling (dual models) |

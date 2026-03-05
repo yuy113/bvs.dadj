@@ -26,7 +26,7 @@
 #' @export
 bvs_phase_eta_profile <- function(adj,
                                   # nolint start: object_length_linter.
-                                  mu = -log(1 / 0.3 - 1),
+                                  mu = -log(1 / 0.1 - 1),
                                   min_eta = 0,
                                   max_eta = 1.5,
                                   step_size = 0.05,
@@ -111,7 +111,7 @@ bvs_eta_grid_single <- function(
   eta1_sd = NULL,
   adj = NULL,
   eta1_frac = seq(0.2, 1.0, by = 0.1),
-  mu = -log(1 / 0.3 - 1),
+  mu = -log(1 / 0.1 - 1),
   phase_min_eta = 0,
   phase_max_eta = 1.5,
   phase_step_size = 0.05,
@@ -121,7 +121,7 @@ bvs_eta_grid_single <- function(
   eta_cap = 2.0,
   mu_tilde = -4,
   eta1_tilde = 0.075,
-  e_eta = 2,
+  e_eta = 1,
   f_eta = 1
 ) {
   phase_profile <- NULL
@@ -198,7 +198,7 @@ bvs_eta_grid_dual <- function(
   adj2 = NULL,
   eta1_frac = seq(0.2, 1.0, by = 0.1),
   eta2_frac = seq(0.2, 1.0, by = 0.1),
-  mu = -log(1 / 0.3 - 1),
+  mu = -log(1 / 0.1 - 1),
   phase_min_eta = 0,
   phase_max_eta = 1.5,
   phase_step_size = 0.05,
@@ -209,7 +209,7 @@ bvs_eta_grid_dual <- function(
   mu_tilde = -4,
   eta1_tilde = 0.075,
   eta2_tilde = 0.065,
-  e_eta = 2,
+  e_eta = 1,
   f_eta = 1
 ) {
   phase_profile1 <- NULL
@@ -706,7 +706,7 @@ bvs_tune_eta <- function(
   mu_tilde = -4,
   eta1_tilde = 0.075,
   eta2_tilde = 0.065,
-  e_eta = 2,
+  e_eta = 1,
   f_eta = 1,
   niter = 50000L,
   burnin = 20000L,
@@ -1135,6 +1135,7 @@ bvs_tune_eta_batch <- function(scenarios, ..., verbose = TRUE) {
   )
 }
 
+#' @method print bvs_eta_tune
 #' @export
 print.bvs_eta_tune <- function(x, ...) {
   cat("BVS eta tuning result\n")

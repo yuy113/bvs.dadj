@@ -9,13 +9,18 @@
 library(BVS.DAdj)
 library(Matrix)
 
-## ---- Setup: simulate logistic regression data ----
+## ---- Setup: simulate binary / continuous / count / TTE outcomes ----
 set.seed(42)
 n <- 200; p <- 50
 X <- matrix(rnorm(n * p), n, p)
 beta_true <- c(rep(1, 5), rep(0.5, 5), rep(0, p - 10))
 prob <- plogis(X %*% beta_true)
 y <- rbinom(n, 1, prob)
+y_cont <- as.numeric(X %*% beta_true + rnorm(n, sd = 0.5))
+y_count <- rnbinom(n, size = 3, mu = exp(0.4 + as.numeric(X %*% beta_true) / 4))
+tte_lp <- as.numeric(X %*% beta_true)
+y_tte_time <- rexp(n, rate = exp(tte_lp / 4))
+y_tte_event <- rbinom(n, 1, 0.7)
 
 # Block adjacency: first 10 variables form a clique
 R_block <- matrix(0L, p, p)
@@ -31,6 +36,46 @@ s1 <- summary(fit1)
 cat("Selected variables:", paste(s1$selected, collapse = ", "), "\n")
 cat("PIPs (first 15):", round(s1$pip[1:15], 2), "\n")
 plot(fit1)
+
+
+## ---- Example 1b: MH with continuous outcome ----
+cat("\n=== Example 1b: bvs_mh, continuous outcome ===\n")
+fit1b <- bvs_mh(
+  X, y_cont,
+  outcome_type = "continuous",
+  adj_type = "fixed", adj_fixed = R_block,
+  niter = 5, burnin = 2
+)
+s1b <- summary(fit1b)
+cat("Outcome type:", fit1b$outcome_type, "\n")
+cat("Selected variables:", paste(s1b$selected, collapse = ", "), "\n")
+
+
+## ---- Example 1c: MH with time-to-event outcome ----
+cat("\n=== Example 1c: bvs_mh, TTE outcome ===\n")
+fit1c <- bvs_mh(
+  X, y_tte_time,
+  event = y_tte_event,
+  outcome_type = "TTE",
+  adj_type = "fixed", adj_fixed = R_block,
+  niter = 5, burnin = 2
+)
+s1c <- summary(fit1c)
+cat("Outcome type:", fit1c$outcome_type, "\n")
+cat("Selected variables:", paste(s1c$selected, collapse = ", "), "\n")
+
+
+## ---- Example 1d: MH with count outcome ----
+cat("\n=== Example 1d: bvs_mh, count outcome ===\n")
+fit1d <- bvs_mh(
+  X, y_count,
+  outcome_type = "count",
+  adj_type = "fixed", adj_fixed = R_block,
+  niter = 5, burnin = 2
+)
+s1d <- summary(fit1d)
+cat("Outcome type:", fit1d$outcome_type, "\n")
+cat("Selected variables:", paste(s1d$selected, collapse = ", "), "\n")
 
 
 ## ---- Example 2: PG with single fixed adjacency ----

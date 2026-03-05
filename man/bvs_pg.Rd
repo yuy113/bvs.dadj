@@ -23,7 +23,7 @@ bvs_pg(
   nu0 = 2,
   sigmasq0 = 1.5,
   h = 1.5,
-  mu = -log(1/0.3 - 1),
+  mu = -log(1/0.1 - 1),
   alpha0 = 0,
   beta0 = 0,
   n_mh_gamma = 3L,
@@ -32,7 +32,7 @@ bvs_pg(
   mu_tilde = -4,
   eta1_tilde = 0.075,
   eta2_tilde = 0.065,
-  e_eta = 2,
+  e_eta = 1,
   f_eta = 1,
   Tmax = 64L,
   proposal_type = 1L,
@@ -40,9 +40,15 @@ bvs_pg(
   v1_ggm = NULL,
   pii_ggm = NULL,
   lambda_ggm = 1,
+  block_size = 1L,
+  pcg_threshold = 500L,
   beta_init = NULL,
   gamma_init = NULL,
-  alpha_init = NULL
+  alpha_init = NULL,
+  z_dat = NULL,
+  tau0 = 0,
+  htau = 1.5,
+  tau_init = NULL
 )
 }
 \arguments{
@@ -80,7 +86,8 @@ One of:
 \code{"ggm_fixed"}.}
 
 \item{S_ggm}{Optional sparse GGM scatter matrix. For ultra-sparse mode,
-supply this explicitly for very large \code{p}.}
+supply this explicitly for very large \code{p}. For sparse backends with
+\code{p >= 10000}, \code{S_ggm} must be provided.}
 
 \item{store_beta}{Logical; in ultra-sparse mode, store beta draws.}
 
@@ -107,7 +114,7 @@ selection: \code{"ebic"} (default) or \code{"ric"}.}
 \item{h}{Intercept variance inflation factor (default 1.5).}
 
 \item{mu}{Ising external field controlling sparsity
-(default \code{-log(1/0.3 - 1)}).}
+(default \code{-log(1/0.1 - 1)}).}
 
 \item{alpha0}{Prior mean for intercept (default 0).}
 
@@ -127,7 +134,7 @@ selection: \code{"ebic"} (default) or \code{"ric"}.}
 
 \item{eta2_tilde}{Auxiliary eta2 coupling (default 0.065).}
 
-\item{e_eta}{Beta prior shape \code{a} for eta (default 2).}
+\item{e_eta}{Beta prior shape \code{a} for eta (default 1).}
 
 \item{f_eta}{Beta prior shape \code{b} for eta (default 1).}
 
@@ -145,11 +152,31 @@ normal (default 1).}
 
 \item{lambda_ggm}{GGM prior scale (default 1).}
 
+\item{block_size}{Integer; block size for Swendsen-Wang cluster updates.
+Default 1 (original single-variable MH).  Set to e.g. 100 to enable
+block updates with Swendsen-Wang clustering and uncollapsed Gibbs.}
+
+\item{pcg_threshold}{Integer; when \code{block_size > 1} and the number of
+active variables exceeds this threshold, use PCG instead of Cholesky for
+beta sampling (default 500).}
+
 \item{beta_init}{Optional initial beta (numeric vector of length p).}
 
 \item{gamma_init}{Optional initial gamma (integer vector of length p).}
 
 \item{alpha_init}{Optional initial intercept (numeric scalar).}
+
+\item{z_dat}{An optional \code{n x q} matrix of additional covariates
+whose regression coefficients (tau) are always included in the model
+(not subject to variable selection). Default \code{NULL} (no extra
+covariates).}
+
+\item{tau0}{Prior mean for tau coefficients (default 0).}
+
+\item{htau}{Tau variance inflation factor: \code{sigmasq_tau = htau * sigmasq}
+(default 1.5).}
+
+\item{tau_init}{Optional initial tau (numeric vector of length \code{ncol(z_dat)}).}
 }
 \value{
 An object of class \code{"bvs"}, a named list with:
@@ -157,6 +184,8 @@ An object of class \code{"bvs"}, a named list with:
     \item{beta}{Matrix of posterior beta samples (niter x p).}
     \item{gamma}{Posterior gamma samples (dense matrix or sparse list,
       depending on backend/storage options).}
+    \item{gamma_pip}{Posterior inclusion probabilities for gamma
+      (length p).}
     \item{alpha}{Vector of posterior alpha (intercept) samples.}
     \item{sigmasq}{Vector of posterior sigma^2 samples.}
     \item{eta1}{Vector of eta1 (dynamic or single-graph coupling) samples
@@ -164,15 +193,24 @@ An object of class \code{"bvs"}, a named list with:
     \item{eta2}{Vector of eta2 (fixed coupling) samples
       (if applicable).}
     \item{Z_list}{List of GGM adjacency snapshots (if applicable).}
+    \item{Z_pip}{Posterior edge inclusion probabilities for GGM adjacency
+      (if applicable).}
+    \item{tau}{Matrix of posterior tau (z_dat coefficient) samples
+      (niter x q), or NULL if z_dat was not supplied.}
     \item{call}{The matched call.}
     \item{adj_type}{The adjacency type used.}
     \item{sampler}{Character: \code{"pg"}.}
+    \item{niter}{Number of stored post-burn-in iterations.}
+    \item{burnin}{Number of burn-in iterations discarded.}
+    \item{p}{Number of predictors in \code{X}.}
+    \item{ntau}{Number of always-included covariates in \code{z_dat}.}
+    \item{n}{Number of observations.}
   }
 }
 \description{
 Bayesian variable selection for logistic regression with an Ising/MRF prior
-on the inclusion indicators gamma, using Polya-Gamma data augmentation for
-exact Gibbs sampling of beta and alpha.  The Ising coupling parameter eta is
+on the variable selection indicators gamma, using Polya-Gamma data augmentation for
+exact Gibbs sampling of beta and alpha.  The Ising/MRF coupling parameters eta1/eta2 are
 updated via Moller et al. (2006) auxiliary variable MH with Propp-Wilson
 perfect simulation.
 }

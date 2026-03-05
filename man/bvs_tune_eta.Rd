@@ -31,7 +31,7 @@ bvs_tune_eta(
   mu_tilde = -4,
   eta1_tilde = 0.075,
   eta2_tilde = 0.065,
-  e_eta = 2,
+  e_eta = 1,
   f_eta = 1,
   niter = 50000L,
   burnin = 20000L,

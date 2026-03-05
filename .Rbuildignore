@@ -1,9 +1,14 @@
-(^|/)\\.DS_Store$
-(^|/)\\.Rlib($|/)
-(^|/)\\.Rcheck($|/)
-(^|/)\\.\\.Rcheck($|/)
+(^|/)\.DS_Store$
+(^|/)\.Rlib($|/)
+(^|/)\.Rcheck($|/)
+(^|/)\.\.Rcheck($|/)
+^BVS\.DAdj\.Rcheck($|/)
 ^doc$
 ^Meta$
+# Compiled object files and shared libraries
+^src/.*\.o$
+^src/.*\.so$
+# Vignette build artifacts
 ^vignettes/.*_cache/
 ^vignettes/.*_files/
 ^vignettes/.*_saved_runs/
@@ -12,11 +17,13 @@
 ^vignettes/.*\.log$
 ^vignettes/figure/
 ^vignettes/generate_rmd\.py$
+# Python helper scripts (not package code)
 ^tmp_lib$
 ^fix_all\.py$
 ^refactor\.py$
 ^rewrite_helpers\.py$
 ^update_cpps\.py$
+# Developer test/profile scripts
 ^profile_1M\.R$
 ^test_.*\.R$
 ^test_.*\.pdf$

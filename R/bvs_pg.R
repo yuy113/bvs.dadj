@@ -62,8 +62,8 @@
 #' @param eta2_sd   Upper bound for eta2 (dual-eta models, default 0.5).
 #' @param mu_tilde  Auxiliary MRF external field for Moller update
 #'   (default -4).
-#' @param eta1_tilde Auxiliary eta1 coupling (default 0.075).
-#' @param eta2_tilde Auxiliary eta2 coupling (default 0.065).
+#' @param eta1_tilde Auxiliary eta1 coupling (default 0.5).
+#' @param eta2_tilde Auxiliary eta2 coupling (default 0.5).
 #' @param e_eta     Beta prior shape \code{a} for eta (default 1).
 #' @param f_eta     Beta prior shape \code{b} for eta (default 1).
 #' @param Tmax      Maximum Propp-Wilson doubling time (default 64).
@@ -73,7 +73,7 @@
 #' @param v0_ggm    GGM SSVS spike variance (default \code{0.015^2}).
 #' @param v1_ggm    GGM SSVS slab variance (default \code{50^2 * 0.015^2}).
 #' @param pii_ggm   GGM SSVS inclusion probability
-#'   (default \code{30/(p-1)}).
+#'   (default \code{4/(p-1)}).
 #' @param lambda_ggm GGM prior scale (default 1).
 #'
 #' @param block_size  Integer; block size for Swendsen-Wang cluster updates.
@@ -188,7 +188,7 @@ bvs_pg <- function(X, y,
                    n_mh_gamma = 3L,
                    eta1_sd = 0.5, eta2_sd = 0.5,
                    mu_tilde = -4,
-                   eta1_tilde = 0.075, eta2_tilde = 0.065,
+                   eta1_tilde = 0.5, eta2_tilde = 0.5,
                    e_eta = 1, f_eta = 1,
                    Tmax = 64L,
                    proposal_type = 1L,
@@ -236,7 +236,7 @@ bvs_pg <- function(X, y,
 
   # Derived GGM defaults
   if (is.null(v1_ggm)) v1_ggm <- (50^2) * v0_ggm
-  if (is.null(pii_ggm)) pii_ggm <- 30 / (p - 1)
+  if (is.null(pii_ggm)) pii_ggm <- 4 / (p - 1)
 
   # Initialisation
   if (is.null(beta_init) || is.null(gamma_init) || is.null(alpha_init)) {

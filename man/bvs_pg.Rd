@@ -30,8 +30,8 @@ bvs_pg(
   eta1_sd = 0.5,
   eta2_sd = 0.5,
   mu_tilde = -4,
-  eta1_tilde = 0.075,
-  eta2_tilde = 0.065,
+  eta1_tilde = 0.5,
+  eta2_tilde = 0.5,
   e_eta = 1,
   f_eta = 1,
   Tmax = 64L,
@@ -130,9 +130,9 @@ selection: \code{"ebic"} (default) or \code{"ric"}.}
 \item{mu_tilde}{Auxiliary MRF external field for Moller update
 (default -4).}
 
-\item{eta1_tilde}{Auxiliary eta1 coupling (default 0.075).}
+\item{eta1_tilde}{Auxiliary eta1 coupling (default 0.5).}
 
-\item{eta2_tilde}{Auxiliary eta2 coupling (default 0.065).}
+\item{eta2_tilde}{Auxiliary eta2 coupling (default 0.5).}
 
 \item{e_eta}{Beta prior shape \code{a} for eta (default 1).}
 
@@ -148,7 +148,7 @@ normal (default 1).}
 \item{v1_ggm}{GGM SSVS slab variance (default \code{50^2 * 0.015^2}).}
 
 \item{pii_ggm}{GGM SSVS inclusion probability
-(default \code{30/(p-1)}).}
+(default \code{4/(p-1)}).}
 
 \item{lambda_ggm}{GGM prior scale (default 1).}
 

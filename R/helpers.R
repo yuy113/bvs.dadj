@@ -123,9 +123,11 @@ estimate_glasso_adj <- function(X,
   diag(adj) <- 0L
 
   if (symmetrize) {
-    adj <- pmax(adj, t(adj)) # symmetrize
-    adj[lower.tri(adj)] <- 0L # upper-tri only
+    # Return a full symmetric adjacency matrix for downstream backends.
+    adj <- pmax(adj, t(adj))
   }
+  diag(adj) <- 0L
+  storage.mode(adj) <- "integer"
 
   adj
 }
@@ -180,8 +182,10 @@ estimate_glasso_adj <- function(X,
   if (nrow(adj) != p || ncol(adj) != p) {
     stop(sprintf("'%s' must be a %d x %d matrix", name, p, p))
   }
-  adj <- (adj + t(adj))
-  adj <- ifelse(adj > 0, 1L, 0L)
+  # HLP-2: preserve inhibitory (negative) edges as present edges.
+  # Any non-zero entry in either direction implies an undirected edge.
+  adj <- (adj != 0) | (t(adj) != 0)
+  adj <- matrix(as.integer(adj), nrow = p, ncol = p)
   diag(adj) <- 0L
   storage.mode(adj) <- "integer"
   adj

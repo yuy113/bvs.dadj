@@ -20,7 +20,8 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
     double tau0 = 0.0, double htau = 1.0,
     Rcpp::Nullable<Rcpp::NumericVector> tau_in = R_NilValue,
     bool store_beta = true, bool store_gamma = true, bool store_Z_list = false,
-    bool store_Z_pip = true, int block_size = 1, int pcg_threshold = 500) {
+    bool store_Z_pip = true, int block_size = 1, int pcg_threshold = 500,
+    bool use_lb_gamma = true) {
   Rcpp::RNGScope scope;
 
   const int n = static_cast<int>(X.n_rows);
@@ -116,7 +117,8 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
   std::vector<int> pw_up(p), pw_dn(p), pw_om1(p), pw_om2(p), pw_om1n(p),
       pw_om2n(p);
 
-  std::mt19937 pg_rng(static_cast<unsigned int>(R::runif(0.0, 1.0) * 1e9));
+  // M-4: pg_rng removed; sample_pg() uses R::rexp() internally for reproducibility.
+  static std::mt19937 pg_rng_dummy(0); // placeholder — ignored by sample_pg()
 
   std::vector<int> Z_pip_cnt;
   init_sparse_pip_counters(S, store_Z_pip, Z_pip_cnt);
@@ -143,6 +145,9 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
   const arma::uword *row_idx = X.row_indices;
   const double *xvals = X.values;
 
+  EtaAdapter eta1_adapter(0.5);  // Vihola RAM for eta1 proposal
+  EtaAdapter eta2_adapter(0.5);  // Vihola RAM for eta2 proposal
+
   const int total_iter = niter + burnin;
   for (int iter = 0; iter < total_iter; ++iter) {
     if (iter > 0 && (iter % 5000) == 0) {
@@ -165,7 +170,7 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
       for (int i = 0; i < n; ++i) {
         const double lp =
             clamp_scalar(alpha + Xb(i) + Z_tau(i), -LINPRED_CLIP, LINPRED_CLIP);
-        omega_pg(i) = sample_pg(lp, pg_rng);
+        omega_pg(i) = sample_pg(lp, pg_rng_dummy);
       }
     }
 
@@ -174,11 +179,13 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
     if (p_act > 0) {
       if (block_size > 1 && p_act > pcg_threshold) {
         // PCG path for large active sets (sparse X)
-        bvs_dadj_block::PCGConfig pcg_cfg(1e-6, 200, pcg_threshold);
-        arma::vec beta_act;
+        bvs_dadj_block::PCGConfig pcg_cfg(1e-4, 200, pcg_threshold);
+        arma::vec beta_act(p_act);
+        for (int k = 0; k < p_act; ++k)
+          beta_act(k) = beta_vec(active_idx[k]);
         bool pcg_ok = bvs_dadj_block::pcg_sample_beta_sparse(
             beta_act, X, active_idx, omega_pg, kappa, alpha, 1.0 / sigmasq,
-            pcg_cfg);
+            pcg_cfg, &Z_tau, beta0);
         if (pcg_ok && static_cast<int>(beta_act.n_elem) == p_act) {
           clamp_vec_inplace(beta_act, -BETA_ABS_MAX, BETA_ABS_MAX);
           beta_vec.zeros();
@@ -204,7 +211,9 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
         prec.diag() += 1.0 / sigmasq;
 
         arma::vec z_star = kappa - omega_pg * alpha - omega_pg % Z_tau;
-        arma::vec rhs = X_act.t() * z_star;
+        // FIX SPG-3: Include beta0 prior mean in RHS
+        arma::vec rhs = X_act.t() * z_star +
+            (beta0 / sigmasq) * arma::ones<arma::vec>(p_act);
 
         arma::mat L;
         bool chol_ok = bvs_dadj::robust_chol_inplace(L, prec);
@@ -294,21 +303,36 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
       }
     } else {
       // --- Original single-variable MH ---
+      // FIX: Include Z_tau in linear predictor for likelihood computation
+      arma::vec Xb_full = Xb + Z_tau;
+      const bool lb_gamma = use_lb_gamma;
+      std::vector<double> lb_score, lb_weight;
+      double lb_Z = 0.0;
+      if (lb_gamma) {
+        init_lb_dual_scores(S, R_fix, Z_active_flag, gamma, mu, eta1, eta2,
+                            lb_score, lb_weight, lb_Z);
+      }
       for (int mh = 0; mh < n_mh_gamma; ++mh) {
-        int j =
-            static_cast<int>(std::floor(R::runif(0.0, static_cast<double>(p))));
-        if (j >= p)
-          j = p - 1;
+        int j = 0;
+        if (lb_gamma) {
+          j = sample_weighted_index(lb_weight, lb_Z, p);
+        } else {
+          j = static_cast<int>(std::floor(R::runif(0.0, static_cast<double>(p))));
+          if (j >= p)
+            j = p - 1;
+        }
 
         int g_curr = static_cast<int>(gamma[j]);
         int g_prop = 1 - g_curr;
+        const int delta_g = g_prop - g_curr;
         double b_curr = beta_vec(j);
         double b_prop = (g_prop == 1) ? R::rnorm(beta0, sd_sig) : 0.0;
         b_prop = clamp_scalar(b_prop, -BETA_ABS_MAX, BETA_ABS_MAX);
         double db = b_prop - b_curr;
 
+        // FIX: Use Xb_full (= Xb + Z_tau) instead of Xb for correct loglik
         double ll_diff =
-            column_ll_diff(y01, Xb, alpha, col_ptr, row_idx, xvals, j, db);
+            column_ll_diff(y01, Xb_full, alpha, col_ptr, row_idx, xvals, j, db);
         double neigh_dyn = 0.0;
         int start = S.col_ptrs[j], end = S.col_ptrs[j + 1];
         for (int idx = start; idx < end; ++idx) {
@@ -321,18 +345,29 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
           neigh_fix += static_cast<int>(gamma[R_fix.row_idx[idx]]);
         }
 
-        double ising = static_cast<double>(g_prop - g_curr) *
+        double ising = static_cast<double>(delta_g) *
                        (mu + eta1 * neigh_dyn + eta2 * neigh_fix);
         double lmh = ll_diff + ising;
+
+        LBProposalDelta lb_delta;
+        if (lb_gamma) {
+          build_lb_dual_delta(S, R_fix, Z_active_flag, gamma, eta1, eta2, j,
+                              delta_g, lb_score, lb_weight, lb_Z, lb_delta);
+          lmh += (lb_delta.log_q_rev - lb_delta.log_q_fwd);
+        }
 
         if (bvs_dadj::safe_mh_accept(lmh)) {
           gamma[j] = static_cast<uint8_t>(g_prop);
           beta_vec(j) = b_prop;
           apply_column_update(Xb, col_ptr, row_idx, xvals, j, db);
+          apply_column_update(Xb_full, col_ptr, row_idx, xvals, j, db);
           if (g_prop == 1)
             activate_gamma(j, active_idx, active_pos);
           else
             deactivate_gamma(j, active_idx, active_pos);
+          if (lb_gamma) {
+            apply_lb_delta(lb_score, lb_weight, lb_Z, lb_delta);
+          }
         }
       }
     }
@@ -393,7 +428,8 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
     moller_update_dual_sparse(
         S, R_fix, Z_active_flag, p, mu, eta1, eta2, eta1_sd, eta2_sd, mu_tilde,
         eta1_tilde, eta2_tilde, gamma, e_eta, f_eta, T_max, proposal_type,
-        pw_up, pw_dn, pw_om1, pw_om2, pw_om1n, pw_om2n);
+        pw_up, pw_dn, pw_om1, pw_om2, pw_om1n, pw_om2n,
+        eta1_adapter, eta2_adapter);
 
     maybe_store_sparse_state(
         iter, burnin, thin, n_save, store_beta, store_gamma, store_Z_list,

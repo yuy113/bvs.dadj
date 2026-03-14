@@ -1,5 +1,7 @@
 // [[Rcpp::depends(RcppArmadillo)]]
+#include "BVS_HMC_NUTS.h"
 #include "BayesLogit_Numerics.h"
+#include "BayesLogit_Sparse_Helpers.h"
 #include <RcppArmadillo.h>
 #include <algorithm>
 #include <cmath>
@@ -37,51 +39,7 @@ static inline double calc_loglik_count(const arma::uvec &y_count,
                                                  log_w_count);
 }
 
-// Gaussian Log-Likelihood for continuous outcome
-static inline double calc_loglik_continuous(const arma::vec &y,
-                                            const arma::vec &z, double alpha,
-                                            const arma::vec &offset,
-                                            double sigmasq) {
-  const arma::uword n = y.n_elem;
-  const double log_norm =
-      -0.5 * static_cast<double>(n) * std::log(2.0 * M_PI * sigmasq);
-  double sse = 0.0;
-  for (arma::uword i = 0; i < n; ++i) {
-    const double r = y(i) - (alpha + z(i) + offset(i));
-    sse += r * r;
-  }
-  return log_norm - 0.5 * sse / sigmasq;
-}
-
-// Normal PDF (not log)
-static inline double normal_pdf(double x, double mu, double sigma) {
-  double z = (x - mu) / sigma;
-  return std::exp(-0.5 * z * z) / (sigma * std::sqrt(2.0 * M_PI));
-}
-
-// Normal CDF via approximation of erf
-static inline double approx_erf(double x) {
-  double y = 1.0 / (1.0 + 0.3275911 * std::abs(x));
-  double val =
-      1.0 - (((((+1.061405429 * y - 1.453152027) * y + 1.421413741) * y -
-               0.284496736) *
-                  y +
-              0.254829592) *
-             y) *
-                std::exp(-x * x);
-  return (x >= 0.0) ? val : -val;
-}
-
-static inline double normal_cdf(double x, double mu, double sigma) {
-  return 0.5 * (1.0 + approx_erf((x - mu) / (sigma * std::sqrt(2.0))));
-}
-
-// Log Beta density: log Beta(x | a, b)
-static inline double log_beta_pdf(double x, double a, double b) {
-  x = std::max(1e-12, std::min(1.0 - 1e-12, x)); // guard against 0 or 1
-  return std::lgamma(a + b) - std::lgamma(a) - std::lgamma(b) +
-         (a - 1.0) * std::log(x) + (b - 1.0) * std::log(1.0 - x);
-}
+// normal_pdf, approx_erf, normal_cdf, log_beta_pdf provided by BayesLogit_Sparse_Helpers.h
 
 // =============================================================================
 // PROPP-WILSON PERFECT SIMULATION (Single Adjacency)
@@ -94,7 +52,8 @@ static inline double log_beta_pdf(double x, double a, double b) {
 // =============================================================================
 static Rcpp::IntegerVector proppwilson_omega(const Rcpp::IntegerMatrix &R1,
                                              double mu, double eta1,
-                                             unsigned int T_max) {
+                                             unsigned int T_max,
+                                             bool *coalesced = nullptr) {
   const unsigned int p = R1.ncol();
   unsigned int T = 2;
 
@@ -102,7 +61,7 @@ static Rcpp::IntegerVector proppwilson_omega(const Rcpp::IntegerMatrix &R1,
   Rcpp::IntegerVector x_down(p, 1);
   Rcpp::NumericVector pi_up(p), pi_down(p);
 
-  int seed_base = static_cast<int>(std::floor(R::runif(0.0, 1.0) * 1000.0)) + 1;
+  int seed_base = static_cast<int>(std::floor(R::runif(0.0, 1.0) * 2147483646.0)) + 1;
 
   while (Rcpp::sum(x_up != x_down) > 0) {
     for (unsigned int k = 0; k < p; ++k) {
@@ -160,10 +119,13 @@ static Rcpp::IntegerVector proppwilson_omega(const Rcpp::IntegerMatrix &R1,
           x_up[m] = (unif01_fb(gen_fb) < prob) ? 1 : 0;
         }
       }
+      if (coalesced) *coalesced = false; // IMP-2: Signal CFTP failure
+      return x_up;
       for (unsigned int k = 0; k < p; ++k)
         x_down[k] = x_up[k];
     }
   }
+  if (coalesced) *coalesced = true;
   return x_up;
 }
 
@@ -180,47 +142,34 @@ static void moller_update_eta(const Rcpp::IntegerMatrix &R1, double mu,
                               double &eta1, double eta1_sd, double mu_tilde,
                               double eta1_tilde, const arma::uvec &gamma,
                               double e_eta, double f_eta, unsigned int T_max,
-                              int proposal_type) {
+                              int proposal_type, EtaAdapter &adapter1) {
+  // Exactly cancel the Moller effect to implement the Exchange Algorithm
+  mu_tilde = mu;
+  eta1_tilde = eta1;
+
   const unsigned int p = R1.ncol();
   double eta1_new;
   double log_prop_ratio = 0.0;
 
-  if (proposal_type == 0) {
-    double a1 = std::max(0.0, eta1 - 0.01);
-    double b1 = std::min(eta1_sd, eta1 + 0.01);
-    eta1_new = R::runif(a1, b1);
-    double c1 = std::max(0.0, eta1_new - 0.01);
-    double d1 = std::min(eta1_sd, eta1_new + 0.01);
-    log_prop_ratio = std::log(b1 - a1) - std::log(d1 - c1);
-  } else {
-    int attempts = 0;
-    do {
-      eta1_new = R::rnorm(eta1, eta1_sd);
-      if (++attempts > 10000) {
-        eta1_new = eta1;
-        break;
-      }
-    } while (eta1_new <= 0.0 || eta1_new >= eta1_sd);
-
-    double log_q_fwd = std::log(normal_pdf(eta1_new, eta1, eta1_sd)) -
-                       std::log(normal_cdf(eta1_sd, eta1, eta1_sd) -
-                                normal_cdf(0.0, eta1, eta1_sd));
-    double log_q_rev = std::log(normal_pdf(eta1, eta1_new, eta1_sd)) -
-                       std::log(normal_cdf(eta1_sd, eta1_new, eta1_sd) -
-                                normal_cdf(0.0, eta1_new, eta1_sd));
-    log_prop_ratio = log_q_rev - log_q_fwd;
-  }
-
+  // Logit-transformed proposal with Vihola RAM adaptation
+  double eta1_safe = std::max(1e-8, std::min(eta1_sd - 1e-8, eta1));
+  double phi = std::log(eta1_safe / (eta1_sd - eta1_safe));
+  double phi_new = R::rnorm(phi, adapter1.sigma());
+  eta1_new = eta1_sd / (1.0 + std::exp(-phi_new));
   eta1_new = std::max(1e-8, std::min(eta1_sd - 1e-8, eta1_new));
+  log_prop_ratio = std::log(eta1_new) + std::log(eta1_sd - eta1_new)
+                 - std::log(eta1_safe) - std::log(eta1_sd - eta1_safe);
 
   // Generate auxiliary variables via Propp-Wilson
-  Rcpp::IntegerVector omega_curr = proppwilson_omega(R1, mu, eta1, T_max);
-  Rcpp::IntegerVector omega_new = proppwilson_omega(R1, mu, eta1_new, T_max);
+  bool c1 = true, c2 = true;
+  Rcpp::IntegerVector omega_curr = proppwilson_omega(R1, mu, eta1, T_max, &c1);
+  Rcpp::IntegerVector omega_new = proppwilson_omega(R1, mu, eta1_new, T_max, &c2);
+  if (!c1 || !c2) { adapter1.update(0.0); return; }
 
   // Compute sufficient statistics
-  int B_R1 = 0;
-  int A_curr_R1 = 0, A_new_R1 = 0;
-  int sum_curr = 0, sum_new = 0;
+  double B_R1 = 0.0;
+  double A_curr_R1 = 0.0, A_new_R1 = 0.0;
+  double sum_curr = 0.0, sum_new = 0.0;
 
   for (unsigned int j = 0; j < p; ++j) {
     sum_curr += omega_curr[j];
@@ -229,9 +178,9 @@ static void moller_update_eta(const Rcpp::IntegerMatrix &R1, double mu,
       int r1jk = R1(j, k);
       if (r1jk == 0)
         continue;
-      B_R1 += (int)gamma(j) * (int)gamma(k);
-      A_curr_R1 += omega_curr[j] * omega_curr[k];
-      A_new_R1 += omega_new[j] * omega_new[k];
+      B_R1 += (double)gamma(j) * (double)gamma(k);
+      A_curr_R1 += (double)omega_curr[j] * (double)omega_curr[k];
+      A_new_R1 += (double)omega_new[j] * (double)omega_new[k];
     }
   }
 
@@ -248,8 +197,10 @@ static void moller_update_eta(const Rcpp::IntegerMatrix &R1, double mu,
 
   double log_MH = log_target + log_aux + log_norm + log_prop_ratio;
 
+  double accept_prob = std::min(1.0, std::exp(std::min(0.0, log_MH)));
   if (bvs_dadj::safe_mh_accept(log_MH))
     eta1 = eta1_new;
+  adapter1.update(accept_prob);
 }
 
 } // anonymous namespace
@@ -273,7 +224,10 @@ Rcpp::List BayesLogit_SingleNet_FixedAdj(
     double tau0 = 0.0, double htau = 1.0,
     Rcpp::Nullable<Rcpp::NumericVector> tau_in = R_NilValue,
     Rcpp::Nullable<Rcpp::NumericVector> event = R_NilValue,
-    std::string outcome_type = "binary") {
+    std::string outcome_type = "binary", bool store_gamma = true,
+    std::string alg_type = "MH", double hmc_step_size = 0.1,
+    int hmc_n_leapfrog = 10, int nuts_max_treedepth = 10,
+    bool use_lb_gamma = true) {
   Rcpp::RNGScope scope;
   const bool is_continuous = bvs_dadj::outcome_is_continuous(outcome_type);
   const bool is_tte = bvs_dadj::outcome_is_tte(outcome_type);
@@ -396,23 +350,72 @@ Rcpp::List BayesLogit_SingleNet_FixedAdj(
     loglik = calc_loglik_binary(y, Xb_total - Z_tau, alpha, Z_tau);
   }
 
-  // OPT: Pre-allocate z_prop buffer (reused every proposal)
-  arma::vec z_prop(n);
-
   // OPT: Pre-allocate active indices buffer (avoids arma::find allocation)
   std::vector<arma::uword> active_idx;
   active_idx.reserve(p);
 
+  // OPT 1: Pre-allocate informed proposal weight buffers
+  arma::vec proposal_weights(p);
+  // Pre-compute neighbor sums for Ising prior (reused per MH scan)
+  arma::vec neigh_sum(p, arma::fill::zeros);
+  for (arma::uword j = 0; j < p; ++j) {
+    for (arma::uword i = 0; i < p; ++i) {
+      if (i != j && R_fix_int(i, j) != 0)
+        neigh_sum(j) += gamma(i);
+    }
+  }
+
+  // Locally-balanced gamma proposal state (Zanella 2020)
+  std::vector<double> lb_score, lb_weight;
+  double lb_Z = 0.0;
+  LBProposalDelta lb_delta;
+
+  // OPT 2: Online PIP accumulation
+  arma::vec gamma_pip_sum(p, arma::fill::zeros);
+
+  // HMC/NUTS initialisation
+  const int alg_type_int = bvs_hmc::parse_alg_type(alg_type);
+  const bool use_hmc_nuts = (alg_type_int == 1 || alg_type_int == 2);
+  const double hmc_target_accept = (alg_type_int == 2) ? 0.80 : 0.65;
+  double hmc_epsilon = hmc_step_size;
+  bvs_hmc::DualAveraging hmc_da;
+  bvs_hmc::HMCNUTSDiagnostics hmc_diag;
+  bvs_hmc::WindowedMassAdapter hmc_mass_adapter;
+  bool hmc_eps_initialised = false;
+  bool hmc_warmup_finalized = false;
+  int hmc_prev_dim = -1;
+  int hmc_post_burnin_adapt_left = 0;
+  const int hmc_post_burnin_adapt_window = 20;
+  if (use_hmc_nuts) {
+    hmc_da.reset(hmc_epsilon, hmc_target_accept);
+    hmc_mass_adapter.reset(
+        static_cast<int>(p), static_cast<int>(ntau), is_tte,
+        std::max(0, burnin * std::max(1, n_thin_gb)));
+  }
+  auto compute_joint = [&](const arma::vec &q) -> std::pair<double, arma::vec> {
+    if (is_tte) {
+      return bvs_hmc::nlp_grad_tte_joint(X, Z_dat, cox_data, active_idx, q,
+                                         beta0, tau0, htau, nu0, sigmasq0);
+    }
+    return bvs_hmc::nlp_grad_binary_joint(X, y, Z_dat, active_idx, q, beta0,
+                                          alpha0, tau0, h, htau, nu0,
+                                          sigmasq0);
+  };
+
   // Output Storage (thinned)
   int n_save = niter / thin;
   arma::mat beta_out(n_save, p);
-  arma::umat gamma_out(n_save, p);
+  arma::umat gamma_out;
+  if (store_gamma)
+    gamma_out.set_size(n_save, p);
   arma::vec eta_out(n_save);
   arma::vec alpha_out(n_save);
   arma::vec sigmasq_out(n_save);
   arma::mat tau_out(n_save, ntau);
 
   // 2. MCMC LOOP
+  EtaAdapter eta1_adapter(0.5);  // Vihola RAM for eta1 proposal
+
   const int total_iter = niter + burnin;
   for (int iter = 0; iter < total_iter; ++iter) {
 
@@ -434,12 +437,47 @@ Rcpp::List BayesLogit_SingleNet_FixedAdj(
     // ---------------------------------------------------------
     for (int thin_gb = 0; thin_gb < n_thin_gb; ++thin_gb) {
 
-      // STEP A: Gamma (Variable Selection) via MH with single Ising prior
+      // STEP A: Gamma (Variable Selection) via Zanella (2020) locally
+      //         informed proposals with single Ising prior
+      // Initialize LB scores before gamma scan
+      arma::ivec gamma_iv;
+      if (use_lb_gamma) {
+        gamma_iv = arma::conv_to<arma::ivec>::from(gamma);
+        init_lb_single_scores_dense(R_fix_int, (int)p, gamma_iv, mu, eta1, lb_score, lb_weight, lb_Z);
+      }
+
       for (arma::uword kk = 0; kk < 5; ++kk) {
-        arma::uword j =
-            static_cast<arma::uword>(std::floor(R::runif(0.0, (double)p)));
-        if (j >= p)
-          j = p - 1;
+
+        arma::uword j;
+        double q_fwd = 0.0, q_bwd = 0.0;
+        if (use_lb_gamma) {
+          j = (arma::uword)sample_weighted_index(lb_weight, lb_Z, (int)p);
+        } else {
+          // --- OPT 1: Compute informed proposal weights for all p variables ---
+          double wt_sum = 0.0;
+          for (arma::uword jj = 0; jj < p; ++jj) {
+            int g_c = gamma(jj);
+            double diff_jj = (g_c == 0) ? 1.0 : -1.0;
+            double ising_jj = diff_jj * (mu + eta1 * neigh_sum(jj));
+            double approx_score = ising_jj;
+            proposal_weights(jj) = std::exp(std::min(0.0, approx_score)) + 1e-10;
+            wt_sum += proposal_weights(jj);
+          }
+          double u_draw = R::runif(0.0, wt_sum);
+          j = 0;
+          double cum_wt = proposal_weights(0);
+          while (cum_wt < u_draw && j < p - 1) {
+            ++j;
+            cum_wt += proposal_weights(j);
+          }
+          q_fwd = proposal_weights(j) / wt_sum;
+          // Pre-compute reverse for non-LB path
+          double diff_jj = (gamma(j) == 0) ? 1.0 : -1.0;
+          double rev_ising_jj = -diff_jj * (mu + eta1 * neigh_sum(j));
+          double q_rev_j = std::exp(std::min(0.0, rev_ising_jj)) + 1e-10;
+          double wt_sum_rev = wt_sum - proposal_weights(j) + q_rev_j;
+          q_bwd = q_rev_j / wt_sum_rev;
+        }
 
         int g_curr = gamma(j);
         int g_prop = 1 - g_curr;
@@ -457,6 +495,7 @@ Rcpp::List BayesLogit_SingleNet_FixedAdj(
           delta_group_W.assign(cox_data.group_start.size(), 0.0);
         }
 
+        // --- OPT 3: Incremental log-likelihood difference ---
         if (is_continuous) {
           ll_diff =
               (arma::dot(xj, resid) * db - 0.5 * X_col_sq_sums(j) * db * db) /
@@ -464,35 +503,61 @@ Rcpp::List BayesLogit_SingleNet_FixedAdj(
         } else if (is_tte) {
           ll_diff = cox_tracker.propose_diff(xj, db, delta_group_W);
         } else {
-          arma::vec z_prop = Xb_total - Z_tau + db * xj;
-          if (is_count) {
-            ll_diff =
-                calc_loglik_count(y_count, z_prop, alpha, Z_tau, log_w_count) -
-                loglik;
-          } else {
-            ll_diff = calc_loglik_binary(y, z_prop, alpha, Z_tau) - loglik;
+          for (arma::uword i = 0; i < (arma::uword)X.n_rows; ++i) {
+            double eta_old = alpha + Xb_total(i);
+            double eta_new = eta_old + db * xj(i);
+            if (is_count) {
+              double lw_i = log_w_count(i);
+              double eta_old_c =
+                  bvs_dadj::clamp_finite(eta_old + lw_i, -50.0, 50.0, 0.0);
+              double eta_new_c =
+                  bvs_dadj::clamp_finite(eta_new + lw_i, -50.0, 50.0, 0.0);
+              ll_diff += (double)y_count(i) * (eta_new_c - eta_old_c) -
+                         (std::exp(eta_new_c) - std::exp(eta_old_c));
+            } else {
+              auto log1pexp = [](double x) -> double {
+                return (x > 0.0) ? x + std::log1p(std::exp(-x))
+                                 : std::log1p(std::exp(x));
+              };
+              ll_diff +=
+                  y(i) * db * xj(i) - (log1pexp(eta_new) - log1pexp(eta_old));
+            }
           }
         }
 
-        // Single adjacency: only fixed network neighbors
-        double neigh = 0.0;
-        for (arma::uword i = 0; i < p; ++i) {
-          if (i == j)
-            continue;
-          if (R_fix_int(i, j) != 0)
-            neigh += gamma(i);
-        }
+        // Ising prior diff (exact, using cached neighbor sum)
+        double ising_diff = diff * (mu + eta1 * neigh_sum(j));
 
-        double ising_diff = diff * (mu + eta1 * neigh);
         double log_ratio = ll_diff + ising_diff;
+
+        // LB correction: adjust MH ratio for non-uniform proposal
+        if (use_lb_gamma) {
+          int delta_g = 1 - 2 * (int)gamma(j);
+          gamma_iv(j) = (int)gamma(j);
+          build_lb_single_delta_dense(R_fix_int, (int)p, gamma_iv, eta1, (int)j, delta_g,
+              lb_score, lb_weight, lb_Z, lb_delta);
+          log_ratio += lb_delta.log_q_rev - lb_delta.log_q_fwd;
+        } else {
+          log_ratio += std::log(q_bwd) - std::log(q_fwd);
+        }
 
         if (bvs_dadj::safe_mh_accept(log_ratio)) {
           gamma(j) = g_prop;
           beta(j) = b_prop;
+          // Update cached neighbor sums incrementally
+          for (arma::uword i = 0; i < p; ++i) {
+            if (i != j && R_fix_int(i, j) != 0)
+              neigh_sum(i) += diff;
+          }
+          // Update LB state on acceptance
+          if (use_lb_gamma) {
+            apply_lb_delta(lb_score, lb_weight, lb_Z, lb_delta);
+            gamma_iv(j) = (int)g_prop;
+          }
           if (is_continuous) {
             resid -= db * xj;
             loglik += ll_diff;
-            Xb_total += db * xj; // Keep Xb_total updated for other steps
+            Xb_total += db * xj;
           } else if (is_tte) {
             cox_tracker.apply_diff(xj, db, ll_diff, delta_group_W);
             loglik = cox_tracker.get_loglik();
@@ -511,8 +576,88 @@ Rcpp::List BayesLogit_SingleNet_FixedAdj(
           active_idx.push_back(j);
       }
 
-      // STEP B: Beta updates — MALA for binary/count, Fisher-RW for TTE
-      if (!is_continuous) {
+      // STEP B: Beta updates — HMC/NUTS for binary/TTE (if selected),
+      //         MALA for binary/count, Fisher-RW for TTE
+      if (use_hmc_nuts && !is_continuous && !is_count) {
+        // Persistent step-size state across common gamma flips.
+        const int d_act = (int)active_idx.size();
+        const int ntau_local = (int)Z_dat.n_cols;
+        const int dim_q = d_act + ntau_local + 1 + (is_tte ? 0 : 1);
+        const bool in_warmup = (iter < burnin);
+        const int dim_jump =
+            (hmc_prev_dim >= 0) ? std::abs(dim_q - hmc_prev_dim) : 0;
+        bool need_reinit = bvs_hmc::should_reinit_step_size(
+            hmc_eps_initialised, hmc_prev_dim, dim_q, in_warmup);
+
+        bvs_hmc::DiagMassMatrix mass_current;
+        hmc_mass_adapter.build_joint_mass_matrix(mass_current, active_idx,
+                                                 sigmasq, h, htau, nu0);
+
+        if (!in_warmup && hmc_prev_dim >= 0 && dim_jump > 2 && hmc_post_burnin_adapt_left == 0) {
+          hmc_post_burnin_adapt_left = hmc_post_burnin_adapt_window;
+          hmc_da.reset(bvs_hmc::clamp_epsilon(hmc_epsilon),
+                       hmc_target_accept);
+        }
+        hmc_prev_dim = dim_q;
+
+        if (need_reinit && dim_q > 0) {
+          arma::vec q0(dim_q);
+
+          for (int kk = 0; kk < d_act; ++kk)
+            q0(kk) = beta(active_idx[kk]);
+          if (!is_tte) {
+            q0(d_act) = alpha;
+            for (int kk = 0; kk < ntau_local; ++kk)
+              q0(d_act + 1 + kk) = tau(kk);
+            q0(d_act + 1 + ntau_local) = std::log(sigmasq);
+          } else {
+            for (int kk = 0; kk < ntau_local; ++kk)
+              q0(d_act + kk) = tau(kk);
+            q0(d_act + ntau_local) = std::log(sigmasq);
+          }
+
+          auto res0 = compute_joint(q0);
+          if (res0.second.is_finite()) {
+            hmc_epsilon = bvs_hmc::find_reasonable_epsilon(q0, res0.second,
+                                                           res0.first, compute_joint,
+                                                           mass_current);
+            hmc_da.reset(hmc_epsilon, hmc_target_accept);
+          }
+          hmc_eps_initialised = true;
+        }
+
+        bvs_hmc::HMCSamplingStats step_stats;
+        double accept_prob = bvs_hmc::run_hmc_nuts_joint(
+            alg_type_int, X, y, Z_dat, beta, Xb_total, loglik, alpha, tau,
+            sigmasq, beta0, alpha0, tau0, h, htau, nu0, sigmasq0, active_idx,
+            is_tte, cox_data, cox_tracker, hmc_epsilon, hmc_n_leapfrog,
+            nuts_max_treedepth, compute_joint, &mass_current, &step_stats);
+        hmc_diag.record(hmc_epsilon, step_stats);
+
+        if (in_warmup) {
+          hmc_mass_adapter.observe(active_idx, beta, alpha, tau,
+                                   std::log(std::max(sigmasq, 1e-10)));
+          hmc_epsilon = hmc_da.update(accept_prob);
+        } else {
+          if (!hmc_warmup_finalized) {
+            hmc_epsilon = hmc_da.final_epsilon();
+            hmc_warmup_finalized = true;
+          }
+          if (hmc_post_burnin_adapt_left > 0) {
+            hmc_epsilon = hmc_da.update(accept_prob);
+            --hmc_post_burnin_adapt_left;
+            if (hmc_post_burnin_adapt_left == 0)
+              hmc_epsilon = hmc_da.final_epsilon();
+          }
+        }
+
+        // Refresh mala_resid for subsequent gamma proposals
+        if (!is_tte) {
+          for (arma::uword i = 0; i < n; ++i)
+            mala_resid(i) =
+                y(i) - 1.0 / (1.0 + std::exp(-(alpha + Xb_total(i))));
+        }
+      } else if (!is_continuous) {
         // Refresh MALA residuals from current Xb_total (after Step A gamma
         // flips)
         if (!is_tte) {
@@ -645,7 +790,7 @@ Rcpp::List BayesLogit_SingleNet_FixedAdj(
     // ---------------------------------------------------------
     // STEP C: Alpha — MALA for binary/count, exact Gibbs for continuous
     // ---------------------------------------------------------
-    if (!is_continuous && !is_tte) {
+    if (!is_continuous && !is_tte && !use_hmc_nuts) {
       // Ensure mala_resid is current (refreshed at end of thin_gb loop)
       double sum_resid = arma::accu(mala_resid);
       double g_alpha = sum_resid - (alpha - alpha0) / (h * sigmasq);
@@ -716,7 +861,7 @@ Rcpp::List BayesLogit_SingleNet_FixedAdj(
     // ---------------------------------------------------------
     // STEP C+: Tau — component-wise MALA (binary/count) or block MH (TTE)
     // ---------------------------------------------------------
-    if (ntau > 0) {
+    if (ntau > 0 && !use_hmc_nuts) {
       if (!is_continuous) {
         if (is_tte) {
           // Block random-walk MH for tau under TTE (CoxTracker re-init)
@@ -836,7 +981,7 @@ Rcpp::List BayesLogit_SingleNet_FixedAdj(
     // (likelihood for binary/count/TTE doesn't depend on sigmasq — only priors
     // do)
     // ---------------------------------------------------------
-    {
+    if (!use_hmc_nuts) {
       if (!is_continuous) {
         double ss_beta = 0.0;
         for (arma::uword k = 0; k < active_idx.size(); ++k) {
@@ -889,17 +1034,25 @@ Rcpp::List BayesLogit_SingleNet_FixedAdj(
     // STEP E: Update eta via Moller et al. (2006) + Propp-Wilson
     // ---------------------------------------------------------
     moller_update_eta(R_fix_int, mu, eta1, eta1_sd, mu_tilde, eta1_tilde, gamma,
-                      e_eta, f_eta, T_max, proposal_type);
+                      e_eta, f_eta, T_max, proposal_type, eta1_adapter);
 
     // ---------------------------------------------------------
     // STORE SAMPLES (with thinning)
     // ---------------------------------------------------------
+    // OPT 2: Online PIP accumulation (post-burnin)
+    if (iter >= burnin) {
+      for (arma::uword j = 0; j < p; ++j)
+        gamma_pip_sum(j) += (double)gamma(j);
+    }
+
     if (iter >= burnin && (iter - burnin) % thin == 0) {
       int s = (iter - burnin) / thin;
       if (s < n_save) {
         beta_out.row(s) = beta.t();
-        for (arma::uword j = 0; j < p; ++j)
-          gamma_out(s, j) = gamma(j);
+        if (store_gamma) {
+          for (arma::uword j = 0; j < p; ++j)
+            gamma_out(s, j) = gamma(j);
+        }
         eta_out(s) = eta1;
         alpha_out(s) = alpha;
         sigmasq_out(s) = sigmasq;
@@ -908,8 +1061,17 @@ Rcpp::List BayesLogit_SingleNet_FixedAdj(
     }
   }
 
-  return Rcpp::List::create(
-      Rcpp::Named("beta") = beta_out, Rcpp::Named("gamma") = gamma_out,
+  // OPT 2: Compute final PIP vector
+  double n_post = (double)(total_iter - burnin);
+  arma::vec gamma_pip = (n_post > 0) ? gamma_pip_sum / n_post : gamma_pip_sum;
+
+  Rcpp::List result = Rcpp::List::create(
+      Rcpp::Named("beta") = beta_out, Rcpp::Named("gamma_pip") = gamma_pip,
       Rcpp::Named("eta1") = eta_out, Rcpp::Named("alpha") = alpha_out,
       Rcpp::Named("sigmasq") = sigmasq_out, Rcpp::Named("tau") = tau_out);
+  if (use_hmc_nuts)
+    result["hmc_nuts_diagnostics"] = hmc_diag.to_list(hmc_epsilon);
+  if (store_gamma)
+    result["gamma"] = gamma_out;
+  return result;
 }

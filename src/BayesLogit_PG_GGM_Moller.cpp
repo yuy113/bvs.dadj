@@ -1,6 +1,7 @@
 // [[Rcpp::depends(RcppArmadillo)]]
 #include "BayesLogit_BlockPG.h"
 #include "BayesLogit_Numerics.h"
+#include "BayesLogit_Sparse_Helpers.h"
 #include <RcppArmadillo.h>
 #include <algorithm>
 #include <cmath>
@@ -98,39 +99,7 @@ static inline double calc_loglik(const arma::vec &y, const arma::vec &z,
   return term1 - term2;
 }
 
-// =============================================================================
-// Normal PDF / CDF / erf approximation (for truncated normal proposal)
-// =============================================================================
-static inline double normal_pdf(double x, double mu, double sigma) {
-  double z = (x - mu) / sigma;
-  return std::exp(-0.5 * z * z) / (sigma * std::sqrt(2.0 * M_PI));
-}
-
-static inline double approx_erf(double x) {
-  double y = 1.0 / (1.0 + 0.3275911 * std::abs(x));
-  double val =
-      1.0 - (((((+1.061405429 * y - 1.453152027) * y + 1.421413741) * y -
-               0.284496736) *
-                  y +
-              0.254829592) *
-             y) *
-                std::exp(-x * x);
-  return (x >= 0.0) ? val : -val;
-}
-
-static inline double normal_cdf(double x, double mu, double sigma) {
-  return 0.5 * (1.0 + approx_erf((x - mu) / (sigma * std::sqrt(2.0))));
-}
-
-// =============================================================================
-// Log Beta density: log Beta(x | a, b)
-// =============================================================================
-static inline double log_beta_pdf(double x, double a, double b) {
-  // Clamp x away from 0 and 1 for numerical stability
-  x = std::max(1e-12, std::min(1.0 - 1e-12, x));
-  return std::lgamma(a + b) - std::lgamma(a) - std::lgamma(b) +
-         (a - 1.0) * std::log(x) + (b - 1.0) * std::log(1.0 - x);
-}
+// normal_pdf, approx_erf, normal_cdf, log_beta_pdf provided by BayesLogit_Sparse_Helpers.h
 
 // =============================================================================
 // PROPP-WILSON PERFECT SIMULATION
@@ -146,10 +115,12 @@ static inline double log_beta_pdf(double x, double a, double b) {
 // Monotone coupling with upper/lower chains. Falls back to Gibbs at T_max.
 // Reference: Propp & Wilson (1996), Stingo et al. (2011)
 // =============================================================================
+// IMP-2: Added bool* coalesced output to signal CFTP success/failure.
 static Rcpp::IntegerVector proppwilson_omega(const Rcpp::IntegerMatrix &R1,
                                              const Rcpp::IntegerMatrix &R2,
                                              double mu, double eta1,
-                                             double eta2, unsigned int T_max) {
+                                             double eta2, unsigned int T_max,
+                                             bool *coalesced = nullptr) {
   const unsigned int p = R1.ncol();
   unsigned int T = 2;
 
@@ -157,7 +128,7 @@ static Rcpp::IntegerVector proppwilson_omega(const Rcpp::IntegerMatrix &R1,
   Rcpp::IntegerVector x_down(p, 1);
   Rcpp::NumericVector pi_up(p), pi_down(p);
 
-  int seed_base = static_cast<int>(std::floor(R::runif(0.0, 1.0) * 1000.0)) + 1;
+  int seed_base = static_cast<int>(std::floor(R::runif(0.0, 1.0) * 2147483646.0)) + 1; // M-1: full int range
 
   while (Rcpp::sum(x_up != x_down) > 0) {
     for (unsigned int k = 0; k < p; ++k) {
@@ -173,6 +144,7 @@ static Rcpp::IntegerVector proppwilson_omega(const Rcpp::IntegerMatrix &R1,
       for (unsigned int i = 0; i < p; ++i) {
         double ker_up = 0.0, ker_down = 0.0;
         for (unsigned int j = 0; j < p; ++j) {
+          if (j == i) continue;
           int r1ij = R1(i, j);
           int r2ij = R2(i, j);
           ker_up += eta1 * r1ij * x_up[j] + eta2 * r2ij * x_up[j];
@@ -200,16 +172,21 @@ static Rcpp::IntegerVector proppwilson_omega(const Rcpp::IntegerMatrix &R1,
         for (unsigned int idx = 0; idx < diff_idx.size(); ++idx) {
           unsigned int m = diff_idx[idx];
           double ker = 0.0;
-          for (unsigned int k = 0; k < p; ++k)
+          for (unsigned int k = 0; k < p; ++k) {
+            if (k == m) continue;
             ker += eta1 * R1(m, k) * x_up[k] + eta2 * R2(m, k) * x_up[k];
+          }
           double prob = 1.0 / (1.0 + std::exp(-(mu + ker)));
           x_up[m] = (unif01_fb(gen_fb) < prob) ? 1 : 0;
         }
       }
       for (unsigned int k = 0; k < p; ++k)
         x_down[k] = x_up[k];
+      if (coalesced) *coalesced = false; // IMP-2: Signal CFTP failure
+      return x_up;
     }
   }
+  if (coalesced) *coalesced = true; // IMP-2: Exact coalescence
   return x_up;
 }
 
@@ -228,81 +205,53 @@ moller_update_eta(const Rcpp::IntegerMatrix &R1, const Rcpp::IntegerMatrix &R2,
                   double mu, double &eta1, double &eta2, double eta1_sd,
                   double eta2_sd, double mu_tilde, double eta1_tilde,
                   double eta2_tilde, const arma::uvec &gamma, double e_eta,
-                  double f_eta, unsigned int T_max, int proposal_type) {
+                  double f_eta, unsigned int T_max, int proposal_type,
+                  EtaAdapter &adapter1, EtaAdapter &adapter2) {
+  // Exactly cancel the Moller effect to implement the Exchange Algorithm
+  mu_tilde = mu;
+  eta1_tilde = eta1;
+  eta2_tilde = eta2;
+
   const unsigned int p = R1.ncol();
   double eta1_new, eta2_new;
   double log_prop_ratio_eta1 = 0.0;
   double log_prop_ratio_eta2 = 0.0;
 
-  if (proposal_type == 0) {
-    double a1 = std::max(0.0, eta1 - 0.01);
-    double b1 = std::min(eta1_sd, eta1 + 0.01);
-    eta1_new = R::runif(a1, b1);
-    double a2 = std::max(0.0, eta2 - 0.01);
-    double b2 = std::min(eta2_sd, eta2 + 0.01);
-    eta2_new = R::runif(a2, b2);
-
-    double c1 = std::max(0.0, eta1_new - 0.01);
-    double d1 = std::min(eta1_sd, eta1_new + 0.01);
-    double c2 = std::max(0.0, eta2_new - 0.01);
-    double d2 = std::min(eta2_sd, eta2_new + 0.01);
-
-    log_prop_ratio_eta1 = std::log(b1 - a1) - std::log(d1 - c1);
-    log_prop_ratio_eta2 = std::log(b2 - a2) - std::log(d2 - c2);
-  } else {
-    int attempts = 0;
-    do {
-      eta1_new = R::rnorm(eta1, eta1_sd);
-      if (++attempts > 10000) {
-        eta1_new = eta1;
-        break;
-      }
-    } while (eta1_new <= 0.0 || eta1_new >= eta1_sd);
-
-    attempts = 0;
-    do {
-      eta2_new = R::rnorm(eta2, eta2_sd);
-      if (++attempts > 10000) {
-        eta2_new = eta2;
-        break;
-      }
-    } while (eta2_new <= 0.0 || eta2_new >= eta2_sd);
-
-    double log_q_fwd_1 = std::log(normal_pdf(eta1_new, eta1, eta1_sd)) -
-                         std::log(normal_cdf(eta1_sd, eta1, eta1_sd) -
-                                  normal_cdf(0.0, eta1, eta1_sd));
-    double log_q_rev_1 = std::log(normal_pdf(eta1, eta1_new, eta1_sd)) -
-                         std::log(normal_cdf(eta1_sd, eta1_new, eta1_sd) -
-                                  normal_cdf(0.0, eta1_new, eta1_sd));
-    log_prop_ratio_eta1 = log_q_rev_1 - log_q_fwd_1;
-
-    double log_q_fwd_2 = std::log(normal_pdf(eta2_new, eta2, eta2_sd)) -
-                         std::log(normal_cdf(eta2_sd, eta2, eta2_sd) -
-                                  normal_cdf(0.0, eta2, eta2_sd));
-    double log_q_rev_2 = std::log(normal_pdf(eta2, eta2_new, eta2_sd)) -
-                         std::log(normal_cdf(eta2_sd, eta2_new, eta2_sd) -
-                                  normal_cdf(0.0, eta2_new, eta2_sd));
-    log_prop_ratio_eta2 = log_q_rev_2 - log_q_fwd_2;
-  }
-
+  // IMP-1: Logit-transformed proposals for eta1 and eta2 with Vihola RAM.
+  double eta1_safe = std::max(1e-8, std::min(eta1_sd - 1e-8, eta1));
+  double phi1 = std::log(eta1_safe / (eta1_sd - eta1_safe));
+  double phi1_new = R::rnorm(phi1, adapter1.sigma());
+  eta1_new = eta1_sd / (1.0 + std::exp(-phi1_new));
   eta1_new = std::max(1e-8, std::min(eta1_sd - 1e-8, eta1_new));
+  log_prop_ratio_eta1 = std::log(eta1_new) + std::log(eta1_sd - eta1_new) -
+                        std::log(eta1_safe) - std::log(eta1_sd - eta1_safe);
+
+  double eta2_safe = std::max(1e-8, std::min(eta2_sd - 1e-8, eta2));
+  double phi2 = std::log(eta2_safe / (eta2_sd - eta2_safe));
+  double phi2_new = R::rnorm(phi2, adapter2.sigma());
+  eta2_new = eta2_sd / (1.0 + std::exp(-phi2_new));
   eta2_new = std::max(1e-8, std::min(eta2_sd - 1e-8, eta2_new));
+  log_prop_ratio_eta2 = std::log(eta2_new) + std::log(eta2_sd - eta2_new) -
+                        std::log(eta2_safe) - std::log(eta2_sd - eta2_safe);
 
   // Generate auxiliary variables via Propp-Wilson
+  // IMP-2: Track CFTP coalescence; reject proposal if any call fails.
+  bool c1 = true, c2 = true, c3 = true, c4 = true;
   Rcpp::IntegerVector omega_eta1 =
-      proppwilson_omega(R1, R2, mu, eta1, eta2, T_max);
+      proppwilson_omega(R1, R2, mu, eta1, eta2, T_max, &c1);
   Rcpp::IntegerVector omega_eta2 =
-      proppwilson_omega(R1, R2, mu, eta1, eta2, T_max);
+      proppwilson_omega(R1, R2, mu, eta1, eta2, T_max, &c2);
   Rcpp::IntegerVector omega_eta1_new =
-      proppwilson_omega(R1, R2, mu, eta1_new, eta2, T_max);
+      proppwilson_omega(R1, R2, mu, eta1_new, eta2, T_max, &c3);
   Rcpp::IntegerVector omega_eta2_new =
-      proppwilson_omega(R1, R2, mu, eta1, eta2_new, T_max);
+      proppwilson_omega(R1, R2, mu, eta1, eta2_new, T_max, &c4);
+  if (!c1 || !c2 || !c3 || !c4) return; // Reject: preserve chain exactness
 
-  // Sufficient statistics
-  int B_R1 = 0, B_R2 = 0;
-  int A_om1_R1 = 0, A_om1_R2 = 0, A_om2_R1 = 0, A_om2_R2 = 0;
-  int A_om1n_R1 = 0, A_om1n_R2 = 0, A_om2n_R1 = 0, A_om2n_R2 = 0;
-  int sum_om1 = 0, sum_om2 = 0, sum_om1n = 0, sum_om2n = 0;
+  // Sufficient statistics — use double to prevent int overflow for large p (L-3)
+  double B_R1 = 0.0, B_R2 = 0.0;
+  double A_om1_R1 = 0.0, A_om1_R2 = 0.0, A_om2_R1 = 0.0, A_om2_R2 = 0.0;
+  double A_om1n_R1 = 0.0, A_om1n_R2 = 0.0, A_om2n_R1 = 0.0, A_om2n_R2 = 0.0;
+  double sum_om1 = 0.0, sum_om2 = 0.0, sum_om1n = 0.0, sum_om2n = 0.0;
 
   for (unsigned int j = 0; j < p; ++j) {
     sum_om1 += omega_eta1[j];
@@ -313,16 +262,16 @@ moller_update_eta(const Rcpp::IntegerMatrix &R1, const Rcpp::IntegerMatrix &R2,
       int r1jk = R1(j, k), r2jk = R2(j, k);
       if (r1jk == 0 && r2jk == 0)
         continue;
-      B_R1 += (int)gamma(j) * r1jk * (int)gamma(k);
-      B_R2 += (int)gamma(j) * r2jk * (int)gamma(k);
-      A_om1_R1 += omega_eta1[j] * r1jk * omega_eta1[k];
-      A_om1_R2 += omega_eta1[j] * r2jk * omega_eta1[k];
-      A_om2_R1 += omega_eta2[j] * r1jk * omega_eta2[k];
-      A_om2_R2 += omega_eta2[j] * r2jk * omega_eta2[k];
-      A_om1n_R1 += omega_eta1_new[j] * r1jk * omega_eta1_new[k];
-      A_om1n_R2 += omega_eta1_new[j] * r2jk * omega_eta1_new[k];
-      A_om2n_R1 += omega_eta2_new[j] * r1jk * omega_eta2_new[k];
-      A_om2n_R2 += omega_eta2_new[j] * r2jk * omega_eta2_new[k];
+      B_R1 += (double)gamma(j) * r1jk * (double)gamma(k);
+      B_R2 += (double)gamma(j) * r2jk * (double)gamma(k);
+      A_om1_R1 += (double)omega_eta1[j] * r1jk * (double)omega_eta1[k];
+      A_om1_R2 += (double)omega_eta1[j] * r2jk * (double)omega_eta1[k];
+      A_om2_R1 += (double)omega_eta2[j] * r1jk * (double)omega_eta2[k];
+      A_om2_R2 += (double)omega_eta2[j] * r2jk * (double)omega_eta2[k];
+      A_om1n_R1 += (double)omega_eta1_new[j] * r1jk * (double)omega_eta1_new[k];
+      A_om1n_R2 += (double)omega_eta1_new[j] * r2jk * (double)omega_eta1_new[k];
+      A_om2n_R1 += (double)omega_eta2_new[j] * r1jk * (double)omega_eta2_new[k];
+      A_om2n_R2 += (double)omega_eta2_new[j] * r2jk * (double)omega_eta2_new[k];
     }
   }
 
@@ -346,10 +295,14 @@ moller_update_eta(const Rcpp::IntegerMatrix &R1, const Rcpp::IntegerMatrix &R2,
       eta2 * A_om2_R2 - eta2_new * A_om2n_R2 + eta1 * (A_om2_R1 - A_om2n_R1) +
       log_prop_ratio_eta2;
 
+  double accept_prob_eta1 = std::min(1.0, std::exp(std::min(0.0, log_MH_eta1)));
+  double accept_prob_eta2 = std::min(1.0, std::exp(std::min(0.0, log_MH_eta2)));
   if (bvs_dadj::safe_mh_accept(log_MH_eta1))
     eta1 = eta1_new;
   if (bvs_dadj::safe_mh_accept(log_MH_eta2))
     eta2 = eta2_new;
+  adapter1.update(accept_prob_eta1);
+  adapter2.update(accept_prob_eta2);
 }
 
 } // anonymous namespace
@@ -408,7 +361,7 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
     Rcpp::Nullable<Rcpp::IntegerVector> gamma_in = R_NilValue,
     double alpha_in = 0.0, double tau0 = 0.0, double htau = 1.5,
     Rcpp::Nullable<Rcpp::NumericVector> tau_in = R_NilValue, int block_size = 1,
-    int pcg_threshold = 500) {
+    int pcg_threshold = 500, bool use_lb_gamma = true) {
   Rcpp::RNGScope scope;
 
   const arma::uword n = X.n_rows;
@@ -445,7 +398,12 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
 
   arma::vec z = X * beta;
   arma::vec omega_pg(n, arma::fill::ones);
-  const arma::vec kappa = y - 0.5;
+  // FIX: Convert y from {-1,+1} to {0,1} for PG kappa computation
+  arma::vec y01 = y;
+  for (arma::uword i = 0; i < n; ++i) {
+    if (y01(i) < 0.0) y01(i) = 0.0;
+  }
+  const arma::vec kappa = y01 - 0.5;
 
   // ---- GGM state (Wang 2012) -----------------------------------------------
   arma::mat Sig_ggm = arma::diagmat(S_ggm.diag());
@@ -476,6 +434,11 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
   // ---- R_dyn IntegerMatrix snapshot (rebuilt each iteration for MÃ¶ller) ----
   Rcpp::IntegerMatrix R_dyn_int(p, p);
 
+  // --- Locally-balanced gamma proposal state (Zanella 2020) ---
+  std::vector<double> lb_score, lb_weight;
+  double lb_Z = 0.0;
+  LBProposalDelta lb_delta;
+
   // ---- Output Storage ------------------------------------------------------
   int n_save = niter / thin;
   arma::mat beta_out(n_save, p);
@@ -489,12 +452,19 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
   // Sparse Z_list: each entry stores only (row, col) edge indices from upper
   // triangle
   Rcpp::List Z_list(n_save);
+  // FIX: Add Z_pip accumulator for posterior edge inclusion probabilities
+  arma::mat Z_pip(p, p, arma::fill::zeros);
 
   arma::vec lin(n);
 
   // ==========================================================================
   // MCMC LOOP
   // ==========================================================================
+  EtaAdapter eta1_adapter(0.5);  // Vihola RAM for eta1 proposal
+  EtaAdapter eta2_adapter(0.5);  // Vihola RAM for eta2 proposal
+
+  // M-2: compute reset frequency once outside loop (p is constant)
+  const int ggm_reset_freq_outer = std::max(20, (int)(5000 / p));
   const int total_iter = niter + burnin;
   for (int iter = 0; iter < total_iter; ++iter) {
 
@@ -512,21 +482,20 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
 
     // ==================================================================
     // STEP A: GGM Block-Gibbs (Wang 2012)
+    // FIX PGM-2: Removed per-iteration O(p^3) inv_sympd.
+    //   C_ggm writes below are retained for compatibility but C_ggm is not
+    //   used downstream. Periodic reset every 100 iterations prevents drift.
     // ==================================================================
-    bvs_dadj::sanitize_sym_mat_inplace(Sig_ggm, 1e10, 1e-8);
-    bool inv_ok = arma::inv_sympd(C_ggm, arma::symmatu(Sig_ggm));
-    if (!inv_ok) {
-      arma::mat Sig_try = Sig_ggm;
-      double jitter = 1e-8;
-      for (int attempt = 0; attempt < 6 && !inv_ok; ++attempt) {
-        Sig_try.diag() += jitter;
-        inv_ok = arma::inv_sympd(C_ggm, arma::symmatu(Sig_try));
-        jitter *= 10.0;
-      }
+    // IMP-4: Dimension-adaptive Sig_ggm reset to prevent numerical drift.
+    // M-2: guard iter > 0 (ggm_reset_freq_outer computed once before loop).
+    if (iter > 0 && iter % ggm_reset_freq_outer == 0) {
+      bvs_dadj::sanitize_sym_mat_inplace(Sig_ggm, 1e10, 1e-8);
+      arma::mat C_tmp;
+      bool inv_ok = arma::inv_sympd(C_tmp, arma::symmatu(Sig_ggm));
       if (inv_ok) {
-        Sig_ggm = Sig_try;
-      } else {
-        C_ggm.eye();
+        arma::mat Sig_tmp;
+        inv_ok = arma::inv_sympd(Sig_tmp, arma::symmatu(C_tmp));
+        if (inv_ok) Sig_ggm = Sig_tmp;
       }
     }
 
@@ -535,6 +504,8 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
       vec_remove_idx(S_ggm.col(i), S_i, i, p);
 
       mat_remove_rowcol(Sig_ggm, invC11, i, p);
+      // FIX SNG-3: backup invC11 before Schur complement subtraction
+      arma::mat invC11_backup = invC11;
       invC11 -= (1.0 / Sig_ggm(i, i)) * (Sig12 * Sig12.t());
 
       for (arma::uword k = 0, idx = 0; k < p; ++k) {
@@ -549,8 +520,11 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
       bvs_dadj::sanitize_sym_mat_inplace(Ci, 1e10, 1e-8);
 
       bool ok = bvs_dadj::robust_chol_inplace(U_ggm, Ci);
-      if (!ok)
+      if (!ok) {
+        invC11 = invC11_backup;
+        mat_insert_rowcol(Sig_ggm, invC11, i, p);
         continue;
+      }
 
       mu_i = -solve_spd_chol_upper(U_ggm, S_i);
       bvs_dadj::sanitize_vec_inplace(mu_i, -1e8, 1e8, 0.0);
@@ -614,10 +588,22 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
           Z_ggm(i, j) = active ? 1 : 0;
           R_dyn(j, i) = active ? 1.0 : 0.0;
           R_dyn(i, j) = active ? 1.0 : 0.0;
+          // PGM-3: Keep R_dyn_int in sync to avoid O(p^2) rebuild later
+          int ival = active ? 1 : 0;
+          R_dyn_int(j, i) = ival;
+          R_dyn_int(i, j) = ival;
           k++;
         }
       }
     } // end GGM column sweep
+
+    // Re-initialize LB scores after GGM sweep (Z_ggm changed)
+    if (use_lb_gamma) {
+      arma::ivec gamma_iv(p);
+      for (arma::uword j = 0; j < p; ++j) gamma_iv(j) = (int)gamma(j);
+      init_lb_dual_scores_ggm(R_dyn_int, R_fix_int, (int)p, gamma_iv, mu,
+                               eta1, eta2, lb_score, lb_weight, lb_Z);
+    }
 
     // ==================================================================
     // STEP B: Polya-Gamma augmentation + beta / alpha update
@@ -637,10 +623,11 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
 
       if (block_size > 1 && (int)p_active > pcg_threshold) {
         // PCG path for large active sets
-        bvs_dadj_block::PCGConfig pcg_cfg(1e-6, 200, pcg_threshold);
-        arma::vec beta_act;
+        bvs_dadj_block::PCGConfig pcg_cfg(1e-4, 200, pcg_threshold);
+        arma::vec beta_act = beta.elem(active);
         bool pcg_ok = bvs_dadj_block::pcg_sample_beta(
-            beta_act, X_act, omega_pg, kappa, alpha, 1.0 / sigmasq, pcg_cfg);
+            beta_act, X_act, omega_pg, kappa, alpha, 1.0 / sigmasq, pcg_cfg,
+            &Z_tau, beta0);
         if (pcg_ok && beta_act.n_elem == p_active) {
           beta.zeros();
           beta.elem(active) = beta_act;
@@ -654,7 +641,9 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
         bvs_dadj::sanitize_sym_mat_inplace(prec_beta, 1e10, 1e-8);
 
         arma::vec z_star = kappa - omega_pg * alpha - omega_pg % Z_tau;
-        arma::vec mean_rhs = X_act.t() * z_star;
+        // FIX: Include beta0 prior mean in RHS (was missing)
+        arma::vec mean_rhs = X_act.t() * z_star +
+            (beta0 / sigmasq) * arma::ones<arma::vec>(p_active);
         bvs_dadj::sanitize_vec_inplace(mean_rhs, -1e12, 1e12, 0.0);
 
         arma::mat L_prec;
@@ -724,17 +713,29 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
     } else {
       // Original single-variable MH
       z = X * beta;
-      double loglik = calc_loglik(y, z, alpha, Z_tau);
+      double loglik = calc_loglik(y01, z, alpha, Z_tau);
       if (!std::isfinite(loglik))
         loglik = -std::numeric_limits<double>::infinity();
       double sd_beta = std::sqrt(sigmasq);
       if (!std::isfinite(sd_beta) || sd_beta <= 0.0)
         sd_beta = 1.0;
 
+      // L-4: Build gamma_iv once before the MH loop; update incrementally on accept.
+      // Only build when use_lb_gamma to avoid O(p) cost otherwise.
+      arma::ivec gamma_iv;
+      if (use_lb_gamma) {
+        gamma_iv.set_size(p);
+        for (arma::uword jj = 0; jj < p; ++jj) gamma_iv(jj) = (int)gamma(jj);
+      }
+
       for (int mh = 0; mh < n_mh_gamma; ++mh) {
-        int j = static_cast<int>(std::floor(R::runif(0.0, (double)p)));
-        if (j >= (int)p)
-          j = (int)p - 1;
+        int j;
+        if (use_lb_gamma) {
+          j = sample_weighted_index(lb_weight, lb_Z, (int)p);
+        } else {
+          j = static_cast<int>(std::floor(R::runif(0.0, (double)p)));
+          if (j >= (int)p) j = (int)p - 1;
+        }
 
         int g_curr = gamma(j);
         int g_prop = 1 - g_curr;
@@ -746,7 +747,7 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
         arma::vec z_prop = z + (b_prop - b_curr) * X.col(j);
         if (!z_prop.is_finite())
           continue;
-        double ll_prop = calc_loglik(y, z_prop, alpha, Z_tau);
+        double ll_prop = calc_loglik(y01, z_prop, alpha, Z_tau);
         if (!std::isfinite(ll_prop))
           continue;
 
@@ -768,11 +769,23 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
         if (!std::isfinite(log_ratio))
           continue;
 
+        if (use_lb_gamma) {
+          int delta_g = 1 - 2 * g_curr;
+          build_lb_dual_delta_ggm(R_dyn_int, R_fix_int, (int)p, gamma_iv,
+                                   eta1, eta2, j, delta_g,
+                                   lb_score, lb_weight, lb_Z, lb_delta);
+          log_ratio += lb_delta.log_q_rev - lb_delta.log_q_fwd;
+        }
+
         if (bvs_dadj::safe_mh_accept(log_ratio)) {
           gamma(j) = g_prop;
           beta(j) = b_prop;
           z = z_prop;
           loglik = ll_prop;
+          if (use_lb_gamma) {
+            gamma_iv(j) = g_prop; // L-4: incremental update — only the changed index
+            apply_lb_delta(lb_score, lb_weight, lb_Z, lb_delta);
+          }
         }
       }
     }
@@ -823,30 +836,27 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
         ss_tau += d * d;
       }
       const double da = alpha - alpha0;
-      const double shape_post =
-          0.5 * nu0 + 0.5 * (n_act + 1.0 + (double)ntau);
+      const double shape_post = 0.5 * nu0 + 0.5 * (n_act + 1.0 + (double)ntau);
       const double scale_post =
           0.5 * nu0 * sigmasq0 + 0.5 * (ss_b + da * da / h + ss_tau / htau);
-      const double gdraw = R::rgamma(shape_post, 1.0 / std::max(scale_post, 1e-12));
+      const double gdraw =
+          R::rgamma(shape_post, 1.0 / std::max(scale_post, 1e-12));
       if (std::isfinite(gdraw) && gdraw > 0.0)
         sigmasq = std::max(1e-10, 1.0 / gdraw);
       sigmasq = bvs_dadj::clamp_finite(sigmasq, 1e-10, 1e10, 1.0);
     }
 
     // ==================================================================
-    // STEP E: eta1, eta2 via MÃ¶ller et al. (2006) with Propp-Wilson
+    // STEP E: eta1, eta2 via Moller et al. (2006) with Propp-Wilson
     //
-    // Rebuild R_dyn_int snapshot from current Z_ggm for Propp-Wilson
+    // PGM-3: R_dyn_int is now kept in sync during GGM column sweep
+    // (lines above), eliminating the O(p^2) full rebuild per iteration.
     // R1 = R_dyn (dynamic, from GGM), R2 = R_fix (external pathway)
     // ==================================================================
     {
-      for (arma::uword r = 0; r < p; ++r)
-        for (arma::uword c = 0; c < p; ++c)
-          R_dyn_int(r, c) = (Z_ggm(r, c) == 1) ? 1 : 0;
-
       moller_update_eta(R_dyn_int, R_fix_int, mu, eta1, eta2, eta1_sd, eta2_sd,
                         mu_tilde, eta1_tilde, eta2_tilde, gamma, e_eta, f_eta,
-                        T_max, proposal_type);
+                        T_max, proposal_type, eta1_adapter, eta2_adapter);
     }
 
     // ==================================================================
@@ -864,10 +874,12 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
       tau_out.row(idx) = tau.t();
 
       // Sparse Z storage: only store (row, col) of edges in upper triangle
+      // FIX: Also accumulate Z_pip for posterior edge inclusion probabilities
       std::vector<int> edge_rows, edge_cols;
       for (arma::uword r = 0; r < p; ++r)
         for (arma::uword c = r + 1; c < p; ++c)
           if (Z_ggm(r, c) == 1) {
+            Z_pip(r, c) += 1.0;  // FIX: accumulate for posterior edge PIPs
             edge_rows.push_back(r);
             edge_cols.push_back(c);
           }
@@ -881,9 +893,17 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
     }
   } // end MCMC
 
+  // FIX: Normalize Z_pip to posterior inclusion probabilities
+  double n_post = static_cast<double>(n_save);
+  if (n_post > 0)
+    Z_pip /= n_post;
+  // Symmetrize
+  Z_pip = Z_pip + Z_pip.t();
+
   return Rcpp::List::create(
       Rcpp::Named("beta") = beta_out, Rcpp::Named("gamma") = gamma_out,
       Rcpp::Named("eta1") = eta1_out, Rcpp::Named("eta2") = eta2_out,
       Rcpp::Named("alpha") = alpha_out, Rcpp::Named("sigmasq") = sigmasq_out,
-      Rcpp::Named("tau") = tau_out, Rcpp::Named("Z_list") = Z_list);
+      Rcpp::Named("tau") = tau_out, Rcpp::Named("Z_list") = Z_list,
+      Rcpp::Named("Z_pip") = Z_pip);
 }

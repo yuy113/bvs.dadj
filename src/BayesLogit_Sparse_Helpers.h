@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -128,6 +129,426 @@ static const double PG_OMEGA_MIN = 1e-6;
 static const double SIGMASQ_MIN = 1e-10;
 static const double SIGMASQ_MAX = 1e4;
 static const double BETA_ABS_MAX = 30.0;
+static const double LB_LOGR_CLIP = 60.0;
+
+struct LBProposalDelta {
+  std::vector<int> idx;
+  std::vector<double> score_new;
+  std::vector<double> weight_new;
+  double Z_new = 0.0;
+  double log_q_fwd = 0.0;
+  double log_q_rev = 0.0;
+};
+
+// Vihola (2012) Robust Adaptive Metropolis for 1D proposal scaling.
+// Adapts the logit-scale proposal SD to target a specified acceptance rate.
+// Uses Robbins-Monro on the log-sigma scale with n^{-2/3} step schedule.
+struct EtaAdapter {
+  double log_sigma;
+  double alpha_star;  // target acceptance rate (0.44 for 1D)
+  double gamma_decay; // step-size exponent (2/3)
+  int n_adapt;
+
+  EtaAdapter(double init_sigma = 0.5, double target = 0.44)
+      : log_sigma(std::log(std::max(1e-6, init_sigma))), alpha_star(target),
+        gamma_decay(2.0 / 3.0), n_adapt(0) {}
+
+  double sigma() const {
+    return std::exp(std::max(-10.0, std::min(5.0, log_sigma)));
+  }
+
+  void update(double accept_prob) {
+    ++n_adapt;
+    double step = std::min(1.0, std::pow((double)n_adapt, -gamma_decay));
+    log_sigma += 0.5 * step * (accept_prob - alpha_star);
+    log_sigma = std::max(-10.0, std::min(5.0, log_sigma));
+  }
+};
+
+static inline double lb_clip_logratio(double x) {
+  return clamp_scalar(x, -LB_LOGR_CLIP, LB_LOGR_CLIP);
+}
+
+static inline double lb_weight_from_logratio(double log_ratio) {
+  // Zanella-style balancing with g(t) = sqrt(t) on log scale.
+  return std::max(1e-300, std::exp(0.5 * lb_clip_logratio(log_ratio)));
+}
+
+static inline int sample_weighted_index(const std::vector<double> &w, double Z,
+                                        int p) {
+  if (p <= 1)
+    return 0;
+  if (!std::isfinite(Z) || Z <= 0.0) {
+    int j = static_cast<int>(std::floor(R::runif(0.0, static_cast<double>(p))));
+    return (j >= p) ? (p - 1) : std::max(0, j);
+  }
+  const double u = R::runif(0.0, Z);
+  double cum = 0.0;
+  for (int j = 0; j < p; ++j) {
+    cum += std::max(0.0, w[j]);
+    if (u <= cum)
+      return j;
+  }
+  return p - 1;
+}
+
+static inline void init_lb_single_scores(const ConstSparseS &S,
+                                         const std::vector<uint8_t> &Z_active,
+                                         const std::vector<uint8_t> &gamma,
+                                         double mu, double eta,
+                                         std::vector<double> &score,
+                                         std::vector<double> &weight,
+                                         double &Z_sum) {
+  const int p = S.p;
+  score.assign(p, 0.0);
+  weight.assign(p, 1.0);
+  Z_sum = 0.0;
+  for (int j = 0; j < p; ++j) {
+    double neigh = 0.0;
+    for (int idx = S.col_ptrs[j]; idx < S.col_ptrs[j + 1]; ++idx) {
+      if (Z_active[idx])
+        neigh += static_cast<int>(gamma[S.row_idx[idx]]);
+    }
+    const int g = static_cast<int>(gamma[j]);
+    const double lr = static_cast<double>(1 - 2 * g) * (mu + eta * neigh);
+    score[j] = lb_clip_logratio(lr);
+    weight[j] = lb_weight_from_logratio(score[j]);
+    Z_sum += weight[j];
+  }
+  if (!std::isfinite(Z_sum) || Z_sum <= 0.0) {
+    std::fill(weight.begin(), weight.end(), 1.0);
+    Z_sum = static_cast<double>(p);
+  }
+}
+
+static inline void init_lb_dual_scores(const ConstSparseS &S,
+                                       const ConstSparseAdj &R_fix,
+                                       const std::vector<uint8_t> &Z_active,
+                                       const std::vector<uint8_t> &gamma,
+                                       double mu, double eta1, double eta2,
+                                       std::vector<double> &score,
+                                       std::vector<double> &weight,
+                                       double &Z_sum) {
+  const int p = S.p;
+  score.assign(p, 0.0);
+  weight.assign(p, 1.0);
+  Z_sum = 0.0;
+  for (int j = 0; j < p; ++j) {
+    double neigh_dyn = 0.0;
+    for (int idx = S.col_ptrs[j]; idx < S.col_ptrs[j + 1]; ++idx) {
+      if (Z_active[idx])
+        neigh_dyn += static_cast<int>(gamma[S.row_idx[idx]]);
+    }
+    double neigh_fix = 0.0;
+    for (int idx = R_fix.col_ptrs[j]; idx < R_fix.col_ptrs[j + 1]; ++idx)
+      neigh_fix += static_cast<int>(gamma[R_fix.row_idx[idx]]);
+    const int g = static_cast<int>(gamma[j]);
+    const double lr = static_cast<double>(1 - 2 * g) *
+                      (mu + eta1 * neigh_dyn + eta2 * neigh_fix);
+    score[j] = lb_clip_logratio(lr);
+    weight[j] = lb_weight_from_logratio(score[j]);
+    Z_sum += weight[j];
+  }
+  if (!std::isfinite(Z_sum) || Z_sum <= 0.0) {
+    std::fill(weight.begin(), weight.end(), 1.0);
+    Z_sum = static_cast<double>(p);
+  }
+}
+
+static inline void build_lb_single_delta(const ConstSparseS &S,
+                                         const std::vector<uint8_t> &Z_active,
+                                         const std::vector<uint8_t> &gamma,
+                                         double eta, int j, int delta_g,
+                                         const std::vector<double> &score,
+                                         const std::vector<double> &weight,
+                                         double Z_sum,
+                                         LBProposalDelta &out) {
+  out.idx.clear();
+  out.score_new.clear();
+  out.weight_new.clear();
+  out.Z_new = Z_sum;
+  const double Z_safe = std::max(1e-300, Z_sum);
+  const double wj = std::max(1e-300, weight[j]);
+  out.log_q_fwd = std::log(wj) - std::log(Z_safe);
+
+  // j coordinate flips sign in the Ising log-odds term.
+  const double sj_new = lb_clip_logratio(-score[j]);
+  const double wj_new = lb_weight_from_logratio(sj_new);
+  out.idx.push_back(j);
+  out.score_new.push_back(sj_new);
+  out.weight_new.push_back(wj_new);
+  out.Z_new += (wj_new - weight[j]);
+
+  std::unordered_map<int, double> dscore;
+  for (int idx = S.col_ptrs[j]; idx < S.col_ptrs[j + 1]; ++idx) {
+    if (!Z_active[idx])
+      continue;
+    const int k = S.row_idx[idx];
+    if (k == j)
+      continue;
+    const int sgk = 1 - 2 * static_cast<int>(gamma[k]);
+    dscore[k] += static_cast<double>(sgk * delta_g) * eta;
+  }
+
+  for (const auto &kv : dscore) {
+    const int k = kv.first;
+    const double sk_new = lb_clip_logratio(score[k] + kv.second);
+    const double wk_new = lb_weight_from_logratio(sk_new);
+    out.idx.push_back(k);
+    out.score_new.push_back(sk_new);
+    out.weight_new.push_back(wk_new);
+    out.Z_new += (wk_new - weight[k]);
+  }
+
+  const double Z_new_safe = std::max(1e-300, out.Z_new);
+  out.log_q_rev = std::log(std::max(1e-300, wj_new)) - std::log(Z_new_safe);
+}
+
+static inline void build_lb_dual_delta(const ConstSparseS &S,
+                                       const ConstSparseAdj &R_fix,
+                                       const std::vector<uint8_t> &Z_active,
+                                       const std::vector<uint8_t> &gamma,
+                                       double eta1, double eta2, int j,
+                                       int delta_g,
+                                       const std::vector<double> &score,
+                                       const std::vector<double> &weight,
+                                       double Z_sum,
+                                       LBProposalDelta &out) {
+  out.idx.clear();
+  out.score_new.clear();
+  out.weight_new.clear();
+  out.Z_new = Z_sum;
+  const double Z_safe = std::max(1e-300, Z_sum);
+  const double wj = std::max(1e-300, weight[j]);
+  out.log_q_fwd = std::log(wj) - std::log(Z_safe);
+
+  const double sj_new = lb_clip_logratio(-score[j]);
+  const double wj_new = lb_weight_from_logratio(sj_new);
+  out.idx.push_back(j);
+  out.score_new.push_back(sj_new);
+  out.weight_new.push_back(wj_new);
+  out.Z_new += (wj_new - weight[j]);
+
+  std::unordered_map<int, double> eta_shift;
+  for (int idx = S.col_ptrs[j]; idx < S.col_ptrs[j + 1]; ++idx) {
+    if (!Z_active[idx])
+      continue;
+    const int k = S.row_idx[idx];
+    if (k != j)
+      eta_shift[k] += eta1;
+  }
+  for (int idx = R_fix.col_ptrs[j]; idx < R_fix.col_ptrs[j + 1]; ++idx) {
+    const int k = R_fix.row_idx[idx];
+    if (k != j)
+      eta_shift[k] += eta2;
+  }
+
+  for (const auto &kv : eta_shift) {
+    const int k = kv.first;
+    const int sgk = 1 - 2 * static_cast<int>(gamma[k]);
+    const double dsk = static_cast<double>(sgk * delta_g) * kv.second;
+    const double sk_new = lb_clip_logratio(score[k] + dsk);
+    const double wk_new = lb_weight_from_logratio(sk_new);
+    out.idx.push_back(k);
+    out.score_new.push_back(sk_new);
+    out.weight_new.push_back(wk_new);
+    out.Z_new += (wk_new - weight[k]);
+  }
+
+  const double Z_new_safe = std::max(1e-300, out.Z_new);
+  out.log_q_rev = std::log(std::max(1e-300, wj_new)) - std::log(Z_new_safe);
+}
+
+static inline void apply_lb_delta(std::vector<double> &score,
+                                  std::vector<double> &weight, double &Z_sum,
+                                  const LBProposalDelta &delta) {
+  for (std::size_t t = 0; t < delta.idx.size(); ++t) {
+    const int k = delta.idx[t];
+    score[k] = delta.score_new[t];
+    weight[k] = delta.weight_new[t];
+  }
+  Z_sum = delta.Z_new;
+  if (!std::isfinite(Z_sum) || Z_sum <= 0.0) {
+    Z_sum = 0.0;
+    for (double w : weight)
+      Z_sum += std::max(1e-300, w);
+    if (!std::isfinite(Z_sum) || Z_sum <= 0.0) {
+      std::fill(weight.begin(), weight.end(), 1.0);
+      Z_sum = static_cast<double>(weight.size());
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Dense LB helpers — neighbor-list (FixedAdj) and dense-matrix (GGM) variants
+// Zanella (2020, JASA) locally balanced proposals for dense adjacency backends
+// ---------------------------------------------------------------------------
+
+// FixedAdj single-network: neighbor list stored as IntegerMatrix R (p x p)
+static inline void init_lb_single_scores_dense(
+    const Rcpp::IntegerMatrix &R_adj, int p,
+    const arma::ivec &gamma, double mu, double eta,
+    std::vector<double> &score, std::vector<double> &weight, double &Z_sum) {
+  score.assign(p, 0.0);
+  weight.assign(p, 1.0);
+  Z_sum = 0.0;
+  for (int j = 0; j < p; ++j) {
+    double neigh = 0.0;
+    for (int k = 0; k < p; ++k) {
+      if (k != j && R_adj(k, j) != 0)
+        neigh += gamma(k);
+    }
+    const int g = gamma(j);
+    const double lr = static_cast<double>(1 - 2 * g) * (mu + eta * neigh);
+    score[j] = lb_clip_logratio(lr);
+    weight[j] = lb_weight_from_logratio(score[j]);
+    Z_sum += weight[j];
+  }
+  if (!std::isfinite(Z_sum) || Z_sum <= 0.0) {
+    std::fill(weight.begin(), weight.end(), 1.0);
+    Z_sum = static_cast<double>(p);
+  }
+}
+
+static inline void build_lb_single_delta_dense(
+    const Rcpp::IntegerMatrix &R_adj, int p,
+    const arma::ivec &gamma, double eta, int j, int delta_g,
+    const std::vector<double> &score, const std::vector<double> &weight,
+    double Z_sum, LBProposalDelta &out) {
+  out.idx.clear();
+  out.score_new.clear();
+  out.weight_new.clear();
+  out.Z_new = Z_sum;
+  const double Z_safe = std::max(1e-300, Z_sum);
+  const double wj = std::max(1e-300, weight[j]);
+  out.log_q_fwd = std::log(wj) - std::log(Z_safe);
+
+  const double sj_new = lb_clip_logratio(-score[j]);
+  const double wj_new = lb_weight_from_logratio(sj_new);
+  out.idx.push_back(j);
+  out.score_new.push_back(sj_new);
+  out.weight_new.push_back(wj_new);
+  out.Z_new += (wj_new - weight[j]);
+
+  for (int k = 0; k < p; ++k) {
+    if (k == j || R_adj(k, j) == 0) continue;
+    const int sgk = 1 - 2 * gamma(k);
+    const double dsk = static_cast<double>(sgk * delta_g) * eta;
+    const double sk_new = lb_clip_logratio(score[k] + dsk);
+    const double wk_new = lb_weight_from_logratio(sk_new);
+    out.idx.push_back(k);
+    out.score_new.push_back(sk_new);
+    out.weight_new.push_back(wk_new);
+    out.Z_new += (wk_new - weight[k]);
+  }
+
+  const double Z_new_safe = std::max(1e-300, out.Z_new);
+  out.log_q_rev = std::log(std::max(1e-300, wj_new)) - std::log(Z_new_safe);
+}
+
+// FixedAdj dual-network variant
+static inline void init_lb_dual_scores_dense(
+    const Rcpp::IntegerMatrix &R1, const Rcpp::IntegerMatrix &R2, int p,
+    const arma::ivec &gamma, double mu, double eta1, double eta2,
+    std::vector<double> &score, std::vector<double> &weight, double &Z_sum) {
+  score.assign(p, 0.0);
+  weight.assign(p, 1.0);
+  Z_sum = 0.0;
+  for (int j = 0; j < p; ++j) {
+    double neigh1 = 0.0, neigh2 = 0.0;
+    for (int k = 0; k < p; ++k) {
+      if (k == j) continue;
+      if (R1(k, j) != 0) neigh1 += gamma(k);
+      if (R2(k, j) != 0) neigh2 += gamma(k);
+    }
+    const int g = gamma(j);
+    const double lr = static_cast<double>(1 - 2 * g) *
+                      (mu + eta1 * neigh1 + eta2 * neigh2);
+    score[j] = lb_clip_logratio(lr);
+    weight[j] = lb_weight_from_logratio(score[j]);
+    Z_sum += weight[j];
+  }
+  if (!std::isfinite(Z_sum) || Z_sum <= 0.0) {
+    std::fill(weight.begin(), weight.end(), 1.0);
+    Z_sum = static_cast<double>(p);
+  }
+}
+
+static inline void build_lb_dual_delta_dense(
+    const Rcpp::IntegerMatrix &R1, const Rcpp::IntegerMatrix &R2, int p,
+    const arma::ivec &gamma, double eta1, double eta2, int j, int delta_g,
+    const std::vector<double> &score, const std::vector<double> &weight,
+    double Z_sum, LBProposalDelta &out) {
+  out.idx.clear();
+  out.score_new.clear();
+  out.weight_new.clear();
+  out.Z_new = Z_sum;
+  const double Z_safe = std::max(1e-300, Z_sum);
+  const double wj = std::max(1e-300, weight[j]);
+  out.log_q_fwd = std::log(wj) - std::log(Z_safe);
+
+  const double sj_new = lb_clip_logratio(-score[j]);
+  const double wj_new = lb_weight_from_logratio(sj_new);
+  out.idx.push_back(j);
+  out.score_new.push_back(sj_new);
+  out.weight_new.push_back(wj_new);
+  out.Z_new += (wj_new - weight[j]);
+
+  for (int k = 0; k < p; ++k) {
+    if (k == j) continue;
+    double eta_shift = 0.0;
+    if (R1(k, j) != 0) eta_shift += eta1;
+    if (R2(k, j) != 0) eta_shift += eta2;
+    if (eta_shift == 0.0) continue;
+    const int sgk = 1 - 2 * gamma(k);
+    const double dsk = static_cast<double>(sgk * delta_g) * eta_shift;
+    const double sk_new = lb_clip_logratio(score[k] + dsk);
+    const double wk_new = lb_weight_from_logratio(sk_new);
+    out.idx.push_back(k);
+    out.score_new.push_back(sk_new);
+    out.weight_new.push_back(wk_new);
+    out.Z_new += (wk_new - weight[k]);
+  }
+
+  const double Z_new_safe = std::max(1e-300, out.Z_new);
+  out.log_q_rev = std::log(std::max(1e-300, wj_new)) - std::log(Z_new_safe);
+}
+
+// GGM single-network: Z_ggm is a dynamic dense matrix (changes each iter)
+static inline void init_lb_single_scores_ggm(
+    const Rcpp::IntegerMatrix &Z_ggm, int p,
+    const arma::ivec &gamma, double mu, double eta,
+    std::vector<double> &score, std::vector<double> &weight, double &Z_sum) {
+  // Z_ggm is the current GGM adjacency — identical interface to fixed R
+  init_lb_single_scores_dense(Z_ggm, p, gamma, mu, eta, score, weight, Z_sum);
+}
+
+static inline void build_lb_single_delta_ggm(
+    const Rcpp::IntegerMatrix &Z_ggm, int p,
+    const arma::ivec &gamma, double eta, int j, int delta_g,
+    const std::vector<double> &score, const std::vector<double> &weight,
+    double Z_sum, LBProposalDelta &out) {
+  build_lb_single_delta_dense(Z_ggm, p, gamma, eta, j, delta_g,
+                              score, weight, Z_sum, out);
+}
+
+// GGM dual-network: Z_ggm dynamic + R_fix static
+static inline void init_lb_dual_scores_ggm(
+    const Rcpp::IntegerMatrix &Z_ggm, const Rcpp::IntegerMatrix &R_fix, int p,
+    const arma::ivec &gamma, double mu, double eta1, double eta2,
+    std::vector<double> &score, std::vector<double> &weight, double &Z_sum) {
+  init_lb_dual_scores_dense(Z_ggm, R_fix, p, gamma, mu, eta1, eta2,
+                            score, weight, Z_sum);
+}
+
+static inline void build_lb_dual_delta_ggm(
+    const Rcpp::IntegerMatrix &Z_ggm, const Rcpp::IntegerMatrix &R_fix, int p,
+    const arma::ivec &gamma, double eta1, double eta2, int j, int delta_g,
+    const std::vector<double> &score, const std::vector<double> &weight,
+    double Z_sum, LBProposalDelta &out) {
+  build_lb_dual_delta_dense(Z_ggm, R_fix, p, gamma, eta1, eta2, j, delta_g,
+                            score, weight, Z_sum, out);
+}
 
 static inline double stable_logistic(double x) {
   x = clamp_scalar(x, -LINPRED_CLIP, LINPRED_CLIP);
@@ -139,7 +560,7 @@ static inline double stable_logistic(double x) {
   return ex / (1.0 + ex);
 }
 
-[[maybe_unused]] static double sample_pg(double z, std::mt19937 &rng) {
+[[maybe_unused]] static double sample_pg(double z, std::mt19937 & /*rng*/) {
   if (!std::isfinite(z))
     z = 0.0;
   z = std::abs(clamp_scalar(z, -LINPRED_CLIP, LINPRED_CLIP)) * 0.5;
@@ -148,10 +569,10 @@ static inline double stable_logistic(double x) {
   const double c2_over_pi2 = c2 / PI2;
   const double INV_2PI2 = 1.0 / (2.0 * PI2);
 
-  std::exponential_distribution<double> exp_dist(1.0);
   double s = 0.0;
   for (int k = 0; k < PG_K; ++k) {
-    double g = exp_dist(rng);
+    // Use R RNG for reproducibility with set.seed() across all backends.
+    double g = R::rexp(1.0);
     double kh = k + 0.5;
     s += g / (kh * kh + c2_over_pi2);
   }
@@ -363,12 +784,17 @@ static inline void apply_column_update_resid(arma::vec &resid,
     resid(static_cast<int>(row_idx[k])) -= db * xvals[k];
 }
 
-static void proppwilson_single_sparse(
+// IMP-2: Returns true if CFTP coalesced exactly, false on T_max failure.
+// On failure the result is filled via fallback Gibbs (approximate) but caller
+// should reject the MH proposal to preserve Markov chain exactness.
+static bool proppwilson_single_sparse(
     const ConstSparseS &S, const std::vector<uint8_t> &Z_active_flag, int p,
     double mu, double eta1, unsigned int T_max, std::vector<int> &x_up,
     std::vector<int> &x_down, std::vector<int> &result) {
   unsigned int T = 2;
-  int seed_base = static_cast<int>(std::floor(R::runif(0.0, 1.0) * 1000.0)) + 1;
+  // SPH-5: Enlarged seed space from 1000 to 2^31-1 to avoid seed collisions
+  // across different time steps. Was floor(runif(0,1)*1000)+1.
+  unsigned int seed_base = static_cast<unsigned int>(R::runif(0.0, 1.0) * 2147483647.0) + 1;
 
   auto not_coalesced = [&]() {
     for (int k = 0; k < p; ++k)
@@ -389,7 +815,7 @@ static void proppwilson_single_sparse(
     }
 
     for (int t = -(int)T; t <= -1; ++t) {
-      std::mt19937 gen(-t * seed_base);
+      std::mt19937 gen(static_cast<unsigned int>(-t) * seed_base);
       std::uniform_real_distribution<double> u01(0.0, 1.0);
 
       for (int i = 0; i < p; ++i) {
@@ -414,6 +840,11 @@ static void proppwilson_single_sparse(
 
     T *= 2;
     if (T >= T_max) {
+      // SPH-7: Warn on CFTP non-coalescence so user can diagnose strong coupling.
+      Rcpp::warning("Propp-Wilson single CFTP failed to coalesce at T_max=%d. "
+                    "Consider reducing eta_sd or increasing Tmax.", T_max);
+      // IMP-2: CFTP failed to coalesce. Fill result via fallback Gibbs
+      // (approximate), but return false so caller can reject the proposal.
       std::mt19937 gf(seed_base + 99999);
       std::uniform_real_distribution<double> u01f(0.0, 1.0);
       for (int sw = 0; sw < 100; ++sw) {
@@ -432,16 +863,21 @@ static void proppwilson_single_sparse(
           x_up[k] = (u01f(gf) < stable_logistic(mu + ker)) ? 1 : 0;
         }
       }
-      for (int k = 0; k < p; ++k)
+      for (int k = 0; k < p; ++k) {
         x_down[k] = x_up[k];
+        result[k] = x_up[k];
+      }
+      return false; // Signal CFTP failure
     }
   }
 
   for (int k = 0; k < p; ++k)
     result[k] = x_up[k];
+  return true; // Exact coalescence achieved
 }
 
-static void proppwilson_dual_sparse(const ConstSparseS &S,
+// IMP-2: Returns true if CFTP coalesced exactly, false on T_max failure.
+static bool proppwilson_dual_sparse(const ConstSparseS &S,
                                     const ConstSparseAdj &R_fix,
                                     const std::vector<uint8_t> &Z_active_flag,
                                     int p, double mu, double eta1, double eta2,
@@ -449,7 +885,8 @@ static void proppwilson_dual_sparse(const ConstSparseS &S,
                                     std::vector<int> &x_down,
                                     std::vector<int> &result) {
   unsigned int T = 2;
-  int seed_base = static_cast<int>(std::floor(R::runif(0.0, 1.0) * 1000.0)) + 1;
+  // SPH-5: Enlarged seed space from 1000 to 2^31-1
+  unsigned int seed_base = static_cast<unsigned int>(R::runif(0.0, 1.0) * 2147483647.0) + 1;
 
   auto not_coalesced = [&]() {
     for (int k = 0; k < p; ++k)
@@ -470,7 +907,7 @@ static void proppwilson_dual_sparse(const ConstSparseS &S,
     }
 
     for (int t = -(int)T; t <= -1; ++t) {
-      std::mt19937 gen(-t * seed_base);
+      std::mt19937 gen(static_cast<unsigned int>(-t) * seed_base);
       std::uniform_real_distribution<double> u01(0.0, 1.0);
 
       for (int i = 0; i < p; ++i) {
@@ -504,6 +941,9 @@ static void proppwilson_dual_sparse(const ConstSparseS &S,
 
     T *= 2;
     if (T >= T_max) {
+      // SPH-7: Warn on dual CFTP non-coalescence
+      Rcpp::warning("Propp-Wilson dual CFTP failed to coalesce at T_max=%d. "
+                    "Consider reducing eta_sd or increasing Tmax.", T_max);
       std::mt19937 gf(seed_base + 99999);
       std::uniform_real_distribution<double> u01f(0.0, 1.0);
       for (int sw = 0; sw < 100; ++sw) {
@@ -528,13 +968,17 @@ static void proppwilson_dual_sparse(const ConstSparseS &S,
           x_up[k] = (u01f(gf) < stable_logistic(mu + ker)) ? 1 : 0;
         }
       }
-      for (int k = 0; k < p; ++k)
+      for (int k = 0; k < p; ++k) {
         x_down[k] = x_up[k];
+        result[k] = x_up[k];
+      }
+      return false; // Signal CFTP failure
     }
   }
 
   for (int k = 0; k < p; ++k)
     result[k] = x_up[k];
+  return true; // Exact coalescence achieved
 }
 
 [[maybe_unused]] static void
@@ -544,7 +988,8 @@ proppwilson_dual_sparse(const std::vector<std::vector<int>> &Z_adj,
                         std::vector<int> &x_up, std::vector<int> &x_down,
                         std::vector<int> &result) {
   unsigned int T = 2;
-  int seed_base = static_cast<int>(std::floor(R::runif(0.0, 1.0) * 1000.0)) + 1;
+  // SPH-5: Enlarged seed space from 1000 to 2^31-1
+  unsigned int seed_base = static_cast<unsigned int>(R::runif(0.0, 1.0) * 2147483647.0) + 1;
 
   auto not_coalesced = [&]() {
     for (int k = 0; k < p; ++k)
@@ -565,7 +1010,7 @@ proppwilson_dual_sparse(const std::vector<std::vector<int>> &Z_adj,
     }
 
     for (int t = -(int)T; t <= -1; ++t) {
-      std::mt19937 gen(-t * seed_base);
+      std::mt19937 gen(static_cast<unsigned int>(-t) * seed_base);
       std::uniform_real_distribution<double> u01(0.0, 1.0);
 
       for (int i = 0; i < p; ++i) {
@@ -623,42 +1068,35 @@ proppwilson_dual_sparse(const std::vector<std::vector<int>> &Z_adj,
     double mu, double &eta1, double eta1_sd, double mu_tilde, double eta1_tilde,
     const std::vector<uint8_t> &gamma, double e_eta, double f_eta,
     unsigned int T_max, int proposal_type, std::vector<int> &pw_up,
-    std::vector<int> &pw_dn, std::vector<int> &om1, std::vector<int> &om1n) {
+    std::vector<int> &pw_dn, std::vector<int> &om1, std::vector<int> &om1n,
+    EtaAdapter &adapter1) {
+
+  // Exactly cancel the Moller effect to implement the Exchange Algorithm
+  mu_tilde = mu;
+  eta1_tilde = eta1;
+
   double eta1_new;
   double lpr = 0.0;
 
-  if (proposal_type == 0) {
-    double a = std::max(0.0, eta1 - 0.01);
-    double b = std::min(eta1_sd, eta1 + 0.01);
-    eta1_new = R::runif(a, b);
-    double c = std::max(0.0, eta1_new - 0.01);
-    double d = std::min(eta1_sd, eta1_new + 0.01);
-    lpr = std::log(b - a) - std::log(d - c);
-  } else {
-    int att = 0;
-    do {
-      eta1_new = R::rnorm(eta1, eta1_sd);
-      if (++att > 10000) {
-        eta1_new = eta1;
-        break;
-      }
-    } while (eta1_new <= 0.0 || eta1_new >= eta1_sd);
-
-    double lqf = std::log(normal_pdf(eta1_new, eta1, eta1_sd)) -
-                 std::log(normal_cdf(eta1_sd, eta1, eta1_sd) -
-                          normal_cdf(0.0, eta1, eta1_sd));
-    double lqr = std::log(normal_pdf(eta1, eta1_new, eta1_sd)) -
-                 std::log(normal_cdf(eta1_sd, eta1_new, eta1_sd) -
-                          normal_cdf(0.0, eta1_new, eta1_sd));
-    lpr = lqr - lqf;
-  }
-
+  // IMP-1: Logit-transformed proposal for eta with Vihola RAM adaptation.
+  double eta1_safe = std::max(1e-8, std::min(eta1_sd - 1e-8, eta1));
+  double phi1 = std::log(eta1_safe / (eta1_sd - eta1_safe));
+  double phi1_new = R::rnorm(phi1, adapter1.sigma());
+  eta1_new = eta1_sd / (1.0 + std::exp(-phi1_new));
   eta1_new = std::max(1e-8, std::min(eta1_sd - 1e-8, eta1_new));
 
-  proppwilson_single_sparse(S, Z_active_flag, p, mu, eta1, T_max, pw_up, pw_dn,
-                            om1);
-  proppwilson_single_sparse(S, Z_active_flag, p, mu, eta1_new, T_max, pw_up,
-                            pw_dn, om1n);
+  // Jacobian: log|d(eta)/d(phi)| = log(eta * (eta_sd - eta) / eta_sd)
+  double log_jac_new = std::log(eta1_new) + std::log(eta1_sd - eta1_new) - std::log(eta1_sd);
+  double log_jac_old = std::log(eta1_safe) + std::log(eta1_sd - eta1_safe) - std::log(eta1_sd);
+  lpr = log_jac_new - log_jac_old;
+
+  // IMP-2: Reject proposal if any CFTP call fails to coalesce.
+  // This preserves Markov chain exactness (no fallback Gibbs bias).
+  bool pw_ok1 = proppwilson_single_sparse(S, Z_active_flag, p, mu, eta1, T_max,
+                                          pw_up, pw_dn, om1);
+  bool pw_ok2 = proppwilson_single_sparse(S, Z_active_flag, p, mu, eta1_new,
+                                          T_max, pw_up, pw_dn, om1n);
+  if (!pw_ok1 || !pw_ok2) return; // Reject: keep current eta1
 
   int sum1 = 0, sum1n = 0, B = 0, A1 = 0, A1n = 0;
   for (int j = 0; j < p; ++j) {
@@ -683,8 +1121,10 @@ proppwilson_dual_sparse(const std::vector<std::vector<int>> &Z_adj,
                eta1_tilde * (A1n - A1) + mu * (sum1 - sum1n) + eta1 * A1 -
                eta1_new * A1n + lpr;
 
+  double accept_prob = std::min(1.0, std::exp(std::min(0.0, lmh)));
   if (bvs_dadj::safe_mh_accept(lmh))
     eta1 = eta1_new;
+  adapter1.update(accept_prob);
 }
 
 [[maybe_unused]] static void moller_update_dual_sparse(
@@ -694,81 +1134,47 @@ proppwilson_dual_sparse(const std::vector<std::vector<int>> &Z_adj,
     double eta1_tilde, double eta2_tilde, const std::vector<uint8_t> &gamma,
     double e_eta, double f_eta, unsigned int T_max, int proposal_type,
     std::vector<int> &pw_up, std::vector<int> &pw_dn, std::vector<int> &om1,
-    std::vector<int> &om2, std::vector<int> &om1n, std::vector<int> &om2n) {
+    std::vector<int> &om2, std::vector<int> &om1n, std::vector<int> &om2n,
+    EtaAdapter &adapter1, EtaAdapter &adapter2) {
+
+  // Exactly cancel the Moller effect to implement the Exchange Algorithm
+  mu_tilde = mu;
+  eta1_tilde = eta1;
+  eta2_tilde = eta2;
+
   double eta1_new, eta2_new;
   double lpr1 = 0.0, lpr2 = 0.0;
 
-  if (proposal_type == 0) {
-    double a1 = std::max(0.0, eta1 - 0.01);
-    double b1 = std::min(eta1_sd, eta1 + 0.01);
-    eta1_new = R::runif(a1, b1);
-    double c1 = std::max(0.0, eta1_new - 0.01);
-    double d1 = std::min(eta1_sd, eta1_new + 0.01);
-    lpr1 = std::log(b1 - a1) - std::log(d1 - c1);
-
-    double a2 = std::max(0.0, eta2 - 0.01);
-    double b2 = std::min(eta2_sd, eta2 + 0.01);
-    eta2_new = R::runif(a2, b2);
-    double c2 = std::max(0.0, eta2_new - 0.01);
-    double d2 = std::min(eta2_sd, eta2_new + 0.01);
-    lpr2 = std::log(b2 - a2) - std::log(d2 - c2);
-  } else {
-    int att = 0;
-    do {
-      eta1_new = R::rnorm(eta1, eta1_sd);
-      if (++att > 10000) {
-        eta1_new = eta1;
-        break;
-      }
-    } while (eta1_new <= 0.0 || eta1_new >= eta1_sd);
-
-    att = 0;
-    do {
-      eta2_new = R::rnorm(eta2, eta2_sd);
-      if (++att > 10000) {
-        eta2_new = eta2;
-        break;
-      }
-    } while (eta2_new <= 0.0 || eta2_new >= eta2_sd);
-
-    double lqf1 = std::log(normal_pdf(eta1_new, eta1, eta1_sd)) -
-                  std::log(normal_cdf(eta1_sd, eta1, eta1_sd) -
-                           normal_cdf(0.0, eta1, eta1_sd));
-    double lqr1 = std::log(normal_pdf(eta1, eta1_new, eta1_sd)) -
-                  std::log(normal_cdf(eta1_sd, eta1_new, eta1_sd) -
-                           normal_cdf(0.0, eta1_new, eta1_sd));
-    lpr1 = lqr1 - lqf1;
-
-    double lqf2 = std::log(normal_pdf(eta2_new, eta2, eta2_sd)) -
-                  std::log(normal_cdf(eta2_sd, eta2, eta2_sd) -
-                           normal_cdf(0.0, eta2, eta2_sd));
-    double lqr2 = std::log(normal_pdf(eta2, eta2_new, eta2_sd)) -
-                  std::log(normal_cdf(eta2_sd, eta2_new, eta2_sd) -
-                           normal_cdf(0.0, eta2_new, eta2_sd));
-    lpr2 = lqr2 - lqf2;
-  }
-
+  // IMP-1: Logit-transformed proposals with Vihola RAM adaptation.
+  double eta1_safe = std::max(1e-8, std::min(eta1_sd - 1e-8, eta1));
+  double phi1 = std::log(eta1_safe / (eta1_sd - eta1_safe));
+  double phi1_new = R::rnorm(phi1, adapter1.sigma());
+  eta1_new = eta1_sd / (1.0 + std::exp(-phi1_new));
   eta1_new = std::max(1e-8, std::min(eta1_sd - 1e-8, eta1_new));
+  lpr1 = std::log(eta1_new) + std::log(eta1_sd - eta1_new) -
+         std::log(eta1_safe) - std::log(eta1_sd - eta1_safe);
+
+  double eta2_safe = std::max(1e-8, std::min(eta2_sd - 1e-8, eta2));
+  double phi2 = std::log(eta2_safe / (eta2_sd - eta2_safe));
+  double phi2_new = R::rnorm(phi2, adapter2.sigma());
+  eta2_new = eta2_sd / (1.0 + std::exp(-phi2_new));
   eta2_new = std::max(1e-8, std::min(eta2_sd - 1e-8, eta2_new));
+  lpr2 = std::log(eta2_new) + std::log(eta2_sd - eta2_new) -
+         std::log(eta2_safe) - std::log(eta2_sd - eta2_safe);
 
-  proppwilson_dual_sparse(S, R_fix, Z_active_flag, p, mu, eta1, eta2, T_max,
-                          pw_up, pw_dn, om1);
-  proppwilson_dual_sparse(S, R_fix, Z_active_flag, p, mu, eta1, eta2, T_max,
-                          pw_up, pw_dn, om2);
-  proppwilson_dual_sparse(S, R_fix, Z_active_flag, p, mu, eta1_new, eta2, T_max,
-                          pw_up, pw_dn, om1n);
-  proppwilson_dual_sparse(S, R_fix, Z_active_flag, p, mu, eta1, eta2_new, T_max,
-                          pw_up, pw_dn, om2n);
+  // SPG-2 reduction: With mu_tilde=mu, eta_tilde=eta (exchange form), current
+  // auxiliary-state terms cancel analytically. We only need proposed-state
+  // auxiliary draws, reducing CFTP calls from 4 to 2 per dual update.
+  (void)om1;
+  (void)om2;
+  // IMP-2: Reject proposal if any CFTP call fails to coalesce.
+  bool pw_ok1 = proppwilson_dual_sparse(S, R_fix, Z_active_flag, p, mu,
+                                        eta1_new, eta2, T_max, pw_up, pw_dn, om1n);
+  bool pw_ok2 = proppwilson_dual_sparse(S, R_fix, Z_active_flag, p, mu,
+                                        eta1, eta2_new, T_max, pw_up, pw_dn, om2n);
+  if (!pw_ok1 || !pw_ok2) return; // Reject: keep current eta values
 
-  int sum1 = 0, sum2 = 0, sum1n = 0, sum2n = 0;
-  for (int j = 0; j < p; ++j) {
-    sum1 += om1[j];
-    sum2 += om2[j];
-    sum1n += om1n[j];
-    sum2n += om2n[j];
-  }
-
-  int B1 = 0, A11 = 0, A11n = 0, A21 = 0, A21n = 0;
+  int B1 = 0, A11n = 0;
   for (int j = 0; j < p; ++j) {
     int s_start = S.col_ptrs[j], s_end = S.col_ptrs[j + 1];
     for (int idx = s_start; idx < s_end; ++idx) {
@@ -777,15 +1183,12 @@ proppwilson_dual_sparse(const std::vector<std::vector<int>> &Z_adj,
         if (k <= j)
           continue;
         B1 += static_cast<int>(gamma[j]) * static_cast<int>(gamma[k]);
-        A11 += om1[j] * om1[k];
         A11n += om1n[j] * om1n[k];
-        A21 += om2[j] * om2[k];
-        A21n += om2n[j] * om2n[k];
       }
     }
   }
 
-  int B2 = 0, A12 = 0, A12n = 0, A22 = 0, A22n = 0;
+  int B2 = 0, A22n = 0;
   for (int j = 0; j < p; ++j) {
     int r_start = R_fix.col_ptrs[j], r_end = R_fix.col_ptrs[j + 1];
     for (int idx = r_start; idx < r_end; ++idx) {
@@ -793,38 +1196,35 @@ proppwilson_dual_sparse(const std::vector<std::vector<int>> &Z_adj,
       if (k <= j)
         continue;
       B2 += static_cast<int>(gamma[j]) * static_cast<int>(gamma[k]);
-      A12 += om1[j] * om1[k];
-      A12n += om1n[j] * om1n[k];
-      A22 += om2[j] * om2[k];
       A22n += om2n[j] * om2n[k];
     }
   }
 
   double lp1 = log_beta_pdf(eta1_new / eta1_sd, e_eta, f_eta) -
                log_beta_pdf(eta1 / eta1_sd, e_eta, f_eta);
-  double log_target1 = (eta1_new - eta1) * B1 + lp1;
-  double log_aux1 = mu_tilde * (sum1n - sum1) + eta1_tilde * (A11n - A11) +
-                    eta2_tilde * (A12n - A12);
-  double log_norm1 =
-      mu * (sum1 - sum1n) + eta1 * A11 - eta1_new * A11n + eta2 * (A12 - A12n);
-  double log_mh1 = log_target1 + log_aux1 + log_norm1 + lpr1;
+  // Cancelled-form exchange ratio for eta1:
+  // (eta1_new-eta1) * [B1(gamma) - A11(omega_new)] + prior + proposal ratio
+  double log_mh1 = (eta1_new - eta1) * (B1 - A11n) + lp1 + lpr1;
 
   double lp2 = log_beta_pdf(eta2_new / eta2_sd, e_eta, f_eta) -
                log_beta_pdf(eta2 / eta2_sd, e_eta, f_eta);
-  double log_target2 = (eta2_new - eta2) * B2 + lp2;
-  double log_aux2 = mu_tilde * (sum2n - sum2) + eta1_tilde * (A21n - A21) +
-                    eta2_tilde * (A22n - A22);
-  double log_norm2 =
-      mu * (sum2 - sum2n) + eta2 * A22 - eta2_new * A22n + eta1 * (A21 - A21n);
-  double log_mh2 = log_target2 + log_aux2 + log_norm2 + lpr2;
+  // Cancelled-form exchange ratio for eta2:
+  // (eta2_new-eta2) * [B2(gamma) - A22(omega_new)] + prior + proposal ratio
+  double log_mh2 = (eta2_new - eta2) * (B2 - A22n) + lp2 + lpr2;
 
+  double ap1 = std::min(1.0, std::exp(std::min(0.0, log_mh1)));
   if (bvs_dadj::safe_mh_accept(log_mh1))
     eta1 = eta1_new;
+  adapter1.update(ap1);
+
+  double ap2 = std::min(1.0, std::exp(std::min(0.0, log_mh2)));
   if (bvs_dadj::safe_mh_accept(log_mh2))
     eta2 = eta2_new;
+  adapter2.update(ap2);
 }
 
-static bool validate_and_convert_y(const arma::vec &y, arma::vec &y01) {
+[[maybe_unused]] static bool validate_and_convert_y(const arma::vec &y,
+                                                    arma::vec &y01) {
   const int n = static_cast<int>(y.n_elem);
   y01 = y;
   bool ok01 = true, ok11 = true;
@@ -840,13 +1240,11 @@ static bool validate_and_convert_y(const arma::vec &y, arma::vec &y01) {
   return ok01 || ok11;
 }
 
-static void ggm_column_sweep_sparse(const ConstSparseS &S,
-                                    std::vector<uint8_t> &Z_active_flag, int p,
-                                    double log_pii, double log_1pii,
-                                    double lv0h, double lv1h, double iv0,
-                                    double iv1, arma::mat &A_sub,
-                                    arma::vec &s_ggm, arma::vec &noise_ggm,
-                                    int &n_edges) {
+[[maybe_unused]] static void ggm_column_sweep_sparse(
+    const ConstSparseS &S, std::vector<uint8_t> &Z_active_flag, int p,
+    double log_pii, double log_1pii, double lv0h, double lv1h, double iv0,
+    double iv1, arma::mat &A_sub, arma::vec &s_ggm, arma::vec &noise_ggm,
+    int &n_edges) {
   const int d_max = static_cast<int>(A_sub.n_rows);
   if (d_max <= 0)
     return;
@@ -858,14 +1256,35 @@ static void ggm_column_sweep_sparse(const ConstSparseS &S,
     if (d < 1)
       continue;
 
+    std::unordered_map<int, int> nbr_pos;
+    nbr_pos.reserve(static_cast<size_t>(d) * 2u);
     for (int r = 0; r < d; ++r) {
       int u = S.row_idx[start + r];
+      nbr_pos.emplace(u, r);
       A_sub(r, r) = S.diag[u];
       for (int c = r + 1; c < d; ++c) {
-        int v = S.row_idx[start + c];
-        double w = S.lookup(u, v);
-        A_sub(r, c) = w;
-        A_sub(c, r) = w;
+        A_sub(r, c) = 0.0;
+        A_sub(c, r) = 0.0;
+      }
+    }
+
+    // SPH-6: avoid O(d^2 log d) repeated binary lookups by using a local
+    // neighbor index map and scanning sparse columns once.
+    for (int c = 0; c < d; ++c) {
+      const int v = S.row_idx[start + c];
+      const int v_start = S.col_ptrs[v];
+      const int v_end = S.col_ptrs[v + 1];
+      for (int idx = v_start; idx < v_end; ++idx) {
+        const int u = S.row_idx[idx];
+        auto it = nbr_pos.find(u);
+        if (it != nbr_pos.end()) {
+          const int r = it->second;
+          if (r < c) {
+            const double w = S.values[idx];
+            A_sub(r, c) = w;
+            A_sub(c, r) = w;
+          }
+        }
       }
     }
 
@@ -874,6 +1293,8 @@ static void ggm_column_sweep_sparse(const ConstSparseS &S,
       A_sub(k, k) += active ? iv1 : iv0;
     }
 
+    // SPG-1: Extract d×d block for Cholesky (robust_chol_inplace modifies input).
+    // A_sub is rebuilt from S data each iteration, so it is not needed after this.
     arma::mat A_chol = A_sub.submat(0, 0, d - 1, d - 1);
     arma::mat U;
     bool ok = bvs_dadj::robust_chol_inplace(U, A_chol);
@@ -921,29 +1342,32 @@ static void ggm_column_sweep_sparse(const ConstSparseS &S,
         int idx_ji = S.find_edge_index(i, nbr);
         if (idx_ji >= 0)
           Z_active_flag[idx_ji] = 1;
-        ++n_edges;
+        // SPH-4: Count each edge only once (when i < nbr) to avoid double-count
+        if (i < nbr) ++n_edges;
       } else if (!now && was) {
         Z_active_flag[idx_ij] = 0;
         int idx_ji = S.find_edge_index(i, nbr);
         if (idx_ji >= 0)
           Z_active_flag[idx_ji] = 0;
-        --n_edges;
+        // SPH-4: Decrement only once per edge
+        if (i < nbr) --n_edges;
       }
     }
   }
 }
 
-static void init_sparse_pip_counters(const ConstSparseS &S, bool store_Z_pip,
-                                     std::vector<int> &Z_pip_cnt) {
+[[maybe_unused]] static void
+init_sparse_pip_counters(const ConstSparseS &S, bool store_Z_pip,
+                         std::vector<int> &Z_pip_cnt) {
   if (!store_Z_pip)
     return;
   Z_pip_cnt.assign(S.nnz, 0);
 }
 
-static void accumulate_sparse_pip(const ConstSparseS &S,
-                                  const std::vector<uint8_t> &Z_active_flag,
-                                  bool store_Z_pip,
-                                  std::vector<int> &Z_pip_cnt) {
+[[maybe_unused]] static void
+accumulate_sparse_pip(const ConstSparseS &S,
+                      const std::vector<uint8_t> &Z_active_flag,
+                      bool store_Z_pip, std::vector<int> &Z_pip_cnt) {
   if (!store_Z_pip)
     return;
   for (int j = 0; j < S.p; ++j) {
@@ -957,10 +1381,9 @@ static void accumulate_sparse_pip(const ConstSparseS &S,
   }
 }
 
-static Rcpp::List build_sparse_pip_triplet(const ConstSparseS &S,
-                                           bool store_Z_pip,
-                                           const std::vector<int> &Z_pip_cnt,
-                                           double n_post) {
+[[maybe_unused]] static Rcpp::List
+build_sparse_pip_triplet(const ConstSparseS &S, bool store_Z_pip,
+                         const std::vector<int> &Z_pip_cnt, double n_post) {
   int total = 0;
   if (store_Z_pip) {
     for (int j = 0; j < S.p; ++j) {
@@ -997,7 +1420,7 @@ static Rcpp::List build_sparse_pip_triplet(const ConstSparseS &S,
                             Rcpp::Named("val") = val);
 }
 
-static void maybe_store_sparse_state(
+[[maybe_unused]] static void maybe_store_sparse_state(
     int iter, int burnin, int thin, int n_save, bool store_beta,
     bool store_gamma, bool store_Z_list, const std::vector<int> &active_idx,
     const arma::vec &beta_vec, const ConstSparseS &S,

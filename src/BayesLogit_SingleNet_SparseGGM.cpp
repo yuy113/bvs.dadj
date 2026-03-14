@@ -1,4 +1,5 @@
 // [[Rcpp::depends(RcppArmadillo)]]
+#include "BVS_HMC_NUTS.h"
 #include "BayesLogit_Sparse_Helpers.h"
 #include <RcppArmadillo.h>
 
@@ -19,7 +20,9 @@ Rcpp::List BayesLogit_SingleNet_SparseGGM(
     bool store_beta = true, bool store_gamma = true, bool store_Z_list = false,
     bool store_Z_pip = true,
     Rcpp::Nullable<Rcpp::NumericVector> event = R_NilValue,
-    std::string outcome_type = "binary") {
+    std::string outcome_type = "binary", std::string alg_type = "MH",
+    double hmc_step_size = 0.1, int hmc_n_leapfrog = 10,
+    int nuts_max_treedepth = 10, bool use_lb_gamma = true) {
   Rcpp::RNGScope scope;
   const bool is_continuous = bvs_dadj::outcome_is_continuous(outcome_type);
   const bool is_tte = bvs_dadj::outcome_is_tte(outcome_type);
@@ -217,6 +220,26 @@ Rcpp::List BayesLogit_SingleNet_SparseGGM(
     resid = y_work - alpha - Xb_total;
   }
 
+  // HMC/NUTS initialisation
+  const int alg_type_int = bvs_hmc::parse_alg_type(alg_type);
+  const bool use_hmc_nuts = (alg_type_int == 1 || alg_type_int == 2);
+  const double hmc_target_accept = (alg_type_int == 2) ? 0.80 : 0.65;
+  double hmc_epsilon = hmc_step_size;
+  bvs_hmc::DualAveraging hmc_da;
+  bvs_hmc::HMCNUTSDiagnostics hmc_diag;
+  bvs_hmc::WindowedMassAdapter hmc_mass_adapter;
+  bool hmc_eps_initialised = false;
+  bool hmc_warmup_finalized = false;
+  int hmc_prev_dim = -1;
+  int hmc_post_burnin_adapt_left = 0;
+  const int hmc_post_burnin_adapt_window = 20;
+  if (use_hmc_nuts) {
+    hmc_da.reset(hmc_epsilon, hmc_target_accept);
+    hmc_mass_adapter.reset(p, ntau, is_tte, std::max(0, burnin));
+  }
+
+  EtaAdapter eta1_adapter(0.5);  // Vihola RAM for eta1 proposal
+
   const int total_iter = niter + burnin;
   for (int iter = 0; iter < total_iter; ++iter) {
     if (iter > 0 && (iter % 5000) == 0) {
@@ -240,14 +263,27 @@ Rcpp::List BayesLogit_SingleNet_SparseGGM(
     ggm_column_sweep_sparse(S, Z_active_flag, p, log_pii, log_1pii, lv0h, lv1h,
                             iv0, iv1, A_sub, s_ggm, noise_ggm, n_edges);
 
+    const bool lb_gamma = use_lb_gamma;
+    std::vector<double> lb_score, lb_weight;
+    double lb_Z = 0.0;
+    if (lb_gamma) {
+      init_lb_single_scores(S, Z_active_flag, gamma, mu, eta1, lb_score,
+                            lb_weight, lb_Z);
+    }
+
     for (int mh = 0; mh < n_mh_gamma; ++mh) {
-      int j =
-          static_cast<int>(std::floor(R::runif(0.0, static_cast<double>(p))));
-      if (j >= p)
-        j = p - 1;
+      int j = 0;
+      if (lb_gamma) {
+        j = sample_weighted_index(lb_weight, lb_Z, p);
+      } else {
+        j = static_cast<int>(std::floor(R::runif(0.0, static_cast<double>(p))));
+        if (j >= p)
+          j = p - 1;
+      }
 
       int g_curr = static_cast<int>(gamma[j]);
       int g_prop = 1 - g_curr;
+      const int delta_g = g_prop - g_curr;
       double b_curr = beta_vec(j);
       double b_prop = (g_prop == 1) ? R::rnorm(beta0, sd_sig) : 0.0;
       double db = b_prop - b_curr;
@@ -273,8 +309,15 @@ Rcpp::List BayesLogit_SingleNet_SparseGGM(
           neigh += static_cast<int>(gamma[S.row_idx[idx]]);
       }
 
-      double ising = static_cast<double>(g_prop - g_curr) * (mu + eta1 * neigh);
+      double ising = static_cast<double>(delta_g) * (mu + eta1 * neigh);
       double lmh = ll_diff + ising;
+
+      LBProposalDelta lb_delta;
+      if (lb_gamma) {
+        build_lb_single_delta(S, Z_active_flag, gamma, eta1, j, delta_g,
+                              lb_score, lb_weight, lb_Z, lb_delta);
+        lmh += (lb_delta.log_q_rev - lb_delta.log_q_fwd);
+      }
 
       if (bvs_dadj::safe_mh_accept(lmh)) {
         gamma[j] = static_cast<uint8_t>(g_prop);
@@ -295,11 +338,150 @@ Rcpp::List BayesLogit_SingleNet_SparseGGM(
           activate_gamma(j, active_idx, active_pos);
         else
           deactivate_gamma(j, active_idx, active_pos);
+        if (lb_gamma) {
+          apply_lb_delta(lb_score, lb_weight, lb_Z, lb_delta);
+        }
       }
     }
 
     const int na = static_cast<int>(active_idx.size());
-    if (!is_continuous) {
+    if (use_hmc_nuts && !is_continuous && !is_count) {
+      auto compute = [&](const arma::vec &q) -> std::pair<double, arma::vec> {
+        if (is_tte) {
+          return bvs_hmc::nlp_grad_tte_joint_sparse(
+              static_cast<arma::uword>(n), col_ptr, row_idx, xvals, Z_dat,
+              cox_data, active_idx, q, beta0, tau0, htau, nu0, sigmasq0);
+        }
+        return bvs_hmc::nlp_grad_binary_joint_sparse(
+            static_cast<arma::uword>(n), col_ptr, row_idx, xvals, y_work, Z_dat,
+            active_idx, q, beta0, alpha0, tau0, h, htau, nu0, sigmasq0);
+      };
+
+      int d_act = na;
+      int ntau_local = (int)Z_dat.n_cols;
+      int dim_q = d_act + ntau_local + 1 + (is_tte ? 0 : 1);
+      arma::vec q_curr(dim_q);
+
+      for (int k = 0; k < d_act; ++k)
+        q_curr(k) = beta_vec(active_idx[k]);
+      if (!is_tte) {
+        q_curr(d_act) = alpha;
+        for (int k = 0; k < ntau_local; ++k)
+          q_curr(d_act + 1 + k) = tau(k);
+        q_curr(d_act + 1 + ntau_local) = std::log(sigmasq);
+      } else {
+        for (int k = 0; k < ntau_local; ++k)
+          q_curr(d_act + k) = tau(k);
+        q_curr(d_act + ntau_local) = std::log(sigmasq);
+      }
+
+      // Build mass matrix for preconditioning
+      bvs_hmc::DiagMassMatrix mass;
+      hmc_mass_adapter.build_joint_mass_matrix(mass, active_idx, sigmasq, h,
+                                               htau, nu0);
+
+      // Persistent step-size state across common gamma flips.
+      const bool in_warmup = (iter < burnin);
+      const int dim_jump =
+          (hmc_prev_dim >= 0) ? std::abs(dim_q - hmc_prev_dim) : 0;
+      bool need_reinit = bvs_hmc::should_reinit_step_size(
+          hmc_eps_initialised, hmc_prev_dim, dim_q, in_warmup);
+
+      if (!in_warmup && hmc_prev_dim >= 0 && dim_jump > 2 && hmc_post_burnin_adapt_left == 0) {
+        hmc_post_burnin_adapt_left = hmc_post_burnin_adapt_window;
+        hmc_da.reset(bvs_hmc::clamp_epsilon(hmc_epsilon), hmc_target_accept);
+      }
+      hmc_prev_dim = dim_q;
+
+      if (need_reinit && dim_q > 0) {
+        auto res0 = compute(q_curr);
+        if (res0.second.is_finite()) {
+          hmc_epsilon = bvs_hmc::find_reasonable_epsilon(q_curr, res0.second,
+                                                         res0.first, compute,
+                                                         mass);
+          hmc_da.reset(hmc_epsilon, hmc_target_accept);
+        }
+        hmc_eps_initialised = true;
+      }
+
+      arma::vec q_new = q_curr;
+      auto res0 = compute(q_new);
+      double nlp0 = res0.first;
+      arma::vec grad0 = res0.second;
+
+      bvs_hmc::HMCSamplingStats step_stats;
+      double accept_prob;
+      if (alg_type_int == 1) {
+        accept_prob = bvs_hmc::hmc_step(q_new, nlp0, grad0, hmc_epsilon,
+                                        hmc_n_leapfrog, compute, mass,
+                                        &step_stats);
+      } else {
+        accept_prob = bvs_hmc::nuts_step(q_new, nlp0, grad0, hmc_epsilon,
+                                         nuts_max_treedepth, compute, mass,
+                                         &step_stats);
+      }
+      hmc_diag.record(hmc_epsilon, step_stats);
+
+      if (step_stats.accepted) {
+        // Write back the clamped joint state before rebuilding cached predictors.
+        for (int k = 0; k < d_act; ++k) {
+          int j = active_idx[k];
+          double beta_new = bvs_dadj::clamp_finite(q_new(k), -30.0, 30.0, 0.0);
+          double db = beta_new - beta_vec(j);
+          if (std::abs(db) > 0.0) {
+            beta_vec(j) = beta_new;
+            apply_column_update(Xb, col_ptr, row_idx, xvals, j, db);
+          }
+        }
+
+        if (!is_tte) {
+          alpha = bvs_dadj::clamp_finite(q_new(d_act), -30.0, 30.0, 0.0);
+          for (int k = 0; k < ntau_local; ++k)
+            tau(k) =
+                bvs_dadj::clamp_finite(q_new(d_act + 1 + k), -30.0, 30.0, 0.0);
+          sigmasq = std::exp(bvs_dadj::clamp_finite(
+              q_new(d_act + 1 + ntau_local), -23.0, 9.2, 0.0));
+        } else {
+          for (int k = 0; k < ntau_local; ++k)
+            tau(k) = bvs_dadj::clamp_finite(q_new(d_act + k), -30.0, 30.0, 0.0);
+          sigmasq = std::exp(bvs_dadj::clamp_finite(
+              q_new(d_act + ntau_local), -23.0, 9.2, 0.0));
+        }
+        Z_tau = Z_dat * tau;
+        Xb_total = Xb + Z_tau;
+
+        if (is_tte) {
+          cox_tracker.init(Xb_total, cox_data);
+          loglik = cox_tracker.get_loglik();
+        } else {
+          loglik = calc_loglik_full(y_work, Xb_total, alpha);
+        }
+      }
+
+      if (in_warmup) {
+        hmc_mass_adapter.observe(active_idx, beta_vec, alpha, tau,
+                                 std::log(std::max(sigmasq, 1e-10)));
+        hmc_epsilon = hmc_da.update(accept_prob);
+      } else {
+        if (!hmc_warmup_finalized) {
+          hmc_epsilon = hmc_da.final_epsilon();
+          hmc_warmup_finalized = true;
+        }
+        if (hmc_post_burnin_adapt_left > 0) {
+          hmc_epsilon = hmc_da.update(accept_prob);
+          --hmc_post_burnin_adapt_left;
+          if (hmc_post_burnin_adapt_left == 0)
+            hmc_epsilon = hmc_da.final_epsilon();
+        }
+      }
+
+      // Refresh mala_resid for gamma proposals
+      if (step_stats.accepted && !is_tte) {
+        for (int i = 0; i < n; ++i)
+          mala_resid(i) =
+              y_work(i) - 1.0 / (1.0 + std::exp(-(alpha + Xb_total(i))));
+      }
+    } else if (!is_continuous) {
       if (is_tte) {
         // --- Fisher information-scaled RW for TTE (sparse) ---
         arma::vec cox_H;
@@ -445,7 +627,7 @@ Rcpp::List BayesLogit_SingleNet_SparseGGM(
 
     // Alpha — MALA for binary/count; conjugate Gibbs for continuous.
     {
-      if (!is_continuous && !is_tte) {
+      if (!is_continuous && !is_tte && !use_hmc_nuts) {
         // Refresh mala_resid and compute gradient
         double sum_resid = 0.0;
         for (int i = 0; i < n; ++i) {
@@ -527,7 +709,7 @@ Rcpp::List BayesLogit_SingleNet_SparseGGM(
 
     // SigmaSq — exact Inverse-Gamma Gibbs for all outcome types.
     // For non-continuous outcomes the likelihood does not depend on sigmasq.
-    {
+    if (!use_hmc_nuts) {
       if (!is_continuous) {
         double ss = 0.0;
         for (int j : active_idx) {
@@ -576,7 +758,7 @@ Rcpp::List BayesLogit_SingleNet_SparseGGM(
     }
 
     // --- Tau MH step ---
-    if (ntau > 0) {
+    if (ntau > 0 && !use_hmc_nuts) {
       if (!is_continuous) {
         arma::vec tau_prop(ntau);
         for (arma::uword j = 0; j < ntau; ++j) {
@@ -633,7 +815,8 @@ Rcpp::List BayesLogit_SingleNet_SparseGGM(
 
     moller_update_single_sparse(
         S, Z_active_flag, p, mu, eta1, eta1_sd, mu_tilde, eta1_tilde, gamma,
-        e_eta, f_eta, T_max, proposal_type, pw_up, pw_dn, pw_om1, pw_om1n);
+        e_eta, f_eta, T_max, proposal_type, pw_up, pw_dn, pw_om1, pw_om1n,
+        eta1_adapter);
 
     maybe_store_sparse_state(
         iter, burnin, thin, n_save, store_beta, store_gamma, store_Z_list,
@@ -669,7 +852,7 @@ Rcpp::List BayesLogit_SingleNet_SparseGGM(
       (n_post_gamma > 0) ? (gamma_pip_cnt / static_cast<double>(n_post_gamma))
                          : arma::vec(p, arma::fill::zeros);
 
-  return Rcpp::List::create(
+  Rcpp::List result = Rcpp::List::create(
       Rcpp::Named("beta") = beta_out_sexp,
       Rcpp::Named("gamma") = gamma_out_sexp, Rcpp::Named("eta1") = eta1_out,
       Rcpp::Named("alpha") = alpha_out, Rcpp::Named("sigmasq") = sigmasq_out,
@@ -679,4 +862,7 @@ Rcpp::List BayesLogit_SingleNet_SparseGGM(
       Rcpp::Named("Z_pip_col") = pip_trip["col"],
       Rcpp::Named("Z_pip_val") = pip_trip["val"], Rcpp::Named("p") = p,
       Rcpp::Named("n") = n);
+  if (use_hmc_nuts)
+    result["hmc_nuts_diagnostics"] = hmc_diag.to_list(hmc_epsilon);
+  return result;
 }

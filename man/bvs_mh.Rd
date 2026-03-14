@@ -2,7 +2,8 @@
 % Please edit documentation in R/bvs_mh.R
 \name{bvs_mh}
 \alias{bvs_mh}
-\title{Bayesian Variable Selection via Metropolis-Hastings}
+\title{Bayesian Variable Selection via Metropolis-Hastings (MH) with Optional
+Hamiltonian Monte Carlo (HMC) or No-U-Turn Sampler (NUTS)}
 \usage{
 bvs_mh(
   X,
@@ -30,6 +31,7 @@ bvs_mh(
   alpha0 = 0,
   beta0 = 0,
   n_mh_gamma = 3L,
+  use_lb_gamma = TRUE,
   eta1_sd = 0.5,
   eta2_sd = 0.5,
   mu_tilde = -4,
@@ -49,7 +51,11 @@ bvs_mh(
   z_dat = NULL,
   tau0 = 0,
   htau = 1.5,
-  tau_init = NULL
+  tau_init = NULL,
+  alg_type = c("MH", "HMC", "NUTS"),
+  hmc_step_size = 0.1,
+  hmc_n_leapfrog = 10L,
+  nuts_max_treedepth = 10L
 )
 }
 \arguments{
@@ -143,6 +149,10 @@ backends ignore this parameter for computational efficiency.}
 \item{n_mh_gamma}{Number of gamma MH updates per MCMC iteration
 (default 3; used by GGM/sparse backends).}
 
+\item{use_lb_gamma}{Logical; for sparse GGM backends, use locally-balanced
+Zanella-style coordinate proposals for gamma updates (default \code{TRUE}).
+Ignored by dense backends.}
+
 \item{eta1_sd}{Upper bound for eta1 (single-eta models or dual models, default 0.5).}
 
 \item{eta2_sd}{Upper bound for eta2 (dual-eta models, default 0.5).}
@@ -189,6 +199,25 @@ covariates).}
 (default 1.5).}
 
 \item{tau_init}{Optional initial tau (numeric vector of length \code{ncol(z_dat)}).}
+
+\item{alg_type}{Character string specifying the algorithm for the active
+parameter-block update: \code{"MH"} = Metropolis-Hastings (default),
+\code{"HMC"} = Hamiltonian Monte Carlo, or \code{"NUTS"} = No-U-Turn
+Sampler. HMC and NUTS are only supported for
+\code{outcome_type = "binary"} and \code{"TTE"}. For binary outcomes they
+jointly update active \code{beta}, \code{alpha}, \code{tau}, and
+\code{log(sigmasq)}; for TTE they jointly update active \code{beta},
+\code{tau}, and \code{log(sigmasq)} with \code{alpha} fixed at 0.}
+
+\item{hmc_step_size}{Step size (epsilon) for the Hamiltonian Monte Carlo
+(HMC) and No-U-Turn Sampler (NUTS) algorithms (default 0.1). Note that
+NUTS adapts this automatically during burn-in.}
+
+\item{hmc_n_leapfrog}{Number of leapfrog steps for Hamiltonian Monte Carlo
+(HMC) (default 10).}
+
+\item{nuts_max_treedepth}{Maximum tree depth for the No-U-Turn Sampler
+(NUTS) algorithm (default 10).}
 }
 \value{
 An object of class \code{"bvs"}, a named list with:
@@ -211,7 +240,8 @@ An object of class \code{"bvs"}, a named list with:
       (niter x q), or NULL if z_dat was not supplied.}
     \item{call}{The matched call.}
     \item{adj_type}{The adjacency type used.}
-    \item{sampler}{Character: \code{"mh"}.}
+    \item{sampler}{Character sampler identifier:
+    \code{"mh"}, \code{"hmc"}, or \code{"nuts"}.}
     \item{outcome_type}{Character outcome model used (\code{"binary"},
       \code{"continuous"}, \code{"TTE"}, or \code{"count"}).}
     \item{niter}{Number of stored post-burn-in iterations.}
@@ -224,12 +254,16 @@ An object of class \code{"bvs"}, a named list with:
 \description{
 Bayesian variable selection with an Ising/MRF prior on the inclusion
 indicators gamma. For \code{outcome_type = "binary"} (default), the model
-uses logistic regression and Metropolis-Hastings updates. For
+uses logistic regression and Metropolis-Hastings (MH) updates by default,
+with optional Hamiltonian Monte Carlo (HMC) or No-U-Turn Sampler (NUTS)
+updates. For
 \code{outcome_type = "continuous"}, the model uses a Gaussian likelihood
 with conjugate Normal/Inverse-Gamma updates for \code{beta}, \code{alpha},
 \code{tau}, and \code{sigmasq}. For \code{outcome_type = "TTE"}, the model
 uses a Cox proportional hazards partial likelihood (Breslow ties) for
-right-censored time-to-event outcomes. For
+right-censored time-to-event outcomes, with optionally joint Hamiltonian
+Monte Carlo (HMC) or No-U-Turn Sampler (NUTS) updates of the active
+coefficient block. For
 \code{outcome_type = "count"}, the model uses an overdispersed count
 likelihood via a Poisson-Gamma mixture (negative-binomial representation).
 The Ising coupling parameter eta is updated

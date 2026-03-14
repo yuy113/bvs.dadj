@@ -724,6 +724,10 @@ bvs_tune_eta <- function(
   v1_ggm = NULL,
   pii_ggm = NULL,
   lambda_ggm = 1,
+  z_dat = NULL,           # TUN-2: Forward z_dat (always-included covariates)
+  tau0 = 0,               # TUN-2: Forward tau0 (prior mean for tau)
+  htau = 1.5,             # TUN-2: Forward htau (tau variance inflation factor)
+  tau_init = NULL,         # TUN-2: Forward tau_init
   pip_threshold = 0.50,
   target_fdr = 0.05,
   seed = NULL,
@@ -734,7 +738,7 @@ bvs_tune_eta <- function(
   sampler <- match.arg(sampler)
   glasso_criterion <- match.arg(glasso_criterion)
 
-  X <- as.matrix(X)
+  if (!isTRUE(sparse)) X <- as.matrix(X)
   y <- as.numeric(y)
   p <- ncol(X)
 
@@ -899,7 +903,11 @@ bvs_tune_eta <- function(
       v0_ggm = v0_ggm,
       v1_ggm = v1_ggm,
       pii_ggm = pii_ggm,
-      lambda_ggm = lambda_ggm
+      lambda_ggm = lambda_ggm,
+      z_dat = z_dat,          # TUN-2: Forward z_dat
+      tau0 = tau0,            # TUN-2: Forward tau0
+      htau = htau,            # TUN-2: Forward htau
+      tau_init = tau_init     # TUN-2: Forward tau_init
     )
 
     if (is_dual) {

@@ -1,13 +1,18 @@
-#' Bayesian Variable Selection via Metropolis-Hastings
+#' Bayesian Variable Selection via Metropolis-Hastings (MH) with Optional
+#' Hamiltonian Monte Carlo (HMC) or No-U-Turn Sampler (NUTS)
 #'
 #' Bayesian variable selection with an Ising/MRF prior on the inclusion
 #' indicators gamma. For \code{outcome_type = "binary"} (default), the model
-#' uses logistic regression and Metropolis-Hastings updates. For
+#' uses logistic regression and Metropolis-Hastings (MH) updates by default,
+#' with optional Hamiltonian Monte Carlo (HMC) or No-U-Turn Sampler (NUTS)
+#' updates. For
 #' \code{outcome_type = "continuous"}, the model uses a Gaussian likelihood
 #' with conjugate Normal/Inverse-Gamma updates for \code{beta}, \code{alpha},
 #' \code{tau}, and \code{sigmasq}. For \code{outcome_type = "TTE"}, the model
 #' uses a Cox proportional hazards partial likelihood (Breslow ties) for
-#' right-censored time-to-event outcomes. For
+#' right-censored time-to-event outcomes, with optionally joint Hamiltonian
+#' Monte Carlo (HMC) or No-U-Turn Sampler (NUTS) updates of the active
+#' coefficient block. For
 #' \code{outcome_type = "count"}, the model uses an overdispersed count
 #' likelihood via a Poisson-Gamma mixture (negative-binomial representation).
 #' The Ising coupling parameter eta is updated
@@ -82,17 +87,31 @@
 #'
 #' @param n_mh_gamma  Number of gamma MH updates per MCMC iteration
 #'   (default 3; used by GGM/sparse backends).
-#' @param eta1_sd   Upper bound for eta1 (single-eta models or dual models, default 0.5).
-#' @param eta2_sd   Upper bound for eta2 (dual-eta models, default 0.5).
-#' @param mu_tilde  Auxiliary MRF external field for Moller update
-#'   (default -4).
-#' @param eta1_tilde Auxiliary eta1 coupling (default 0.5).
-#' @param eta2_tilde Auxiliary eta2 coupling (default 0.5).
+#' @param use_lb_gamma Logical; use Zanella (2020) locally-balanced
+#'   \eqn{g(t)=\sqrt{t}} coordinate proposals for gamma updates across
+#'   \emph{all 12 backends} (default \code{TRUE}). Proposal weights are
+#'   \eqn{w_j = \exp(0.5 \cdot \mathrm{clip}[(1-2\gamma_j)(\mu + \eta N_j)])};
+#'   the MH ratio is corrected by the log proposal ratio.
+#'   Set \code{FALSE} to revert to uniform-coordinate baseline.
+#'   Reference: Zanella (2020) \emph{JASA} 115(530), 852--865.
+#' @param eta1_sd   Upper bound for eta1 (Uniform(0, eta1_sd) prior; default 0.5).
+#' @param eta2_sd   Upper bound for eta2 (dual-eta models; Uniform(0, eta2_sd) prior; default 0.5).
+#' @param mu_tilde  Auxiliary MRF external field for Moller/Exchange update
+#'   (default -4; set equal to mu to use the exact Exchange Algorithm).
+#' @param eta1_tilde Auxiliary eta1 coupling for the Exchange Algorithm (default 0.5).
+#' @param eta2_tilde Auxiliary eta2 coupling for the Exchange Algorithm (default 0.5).
 #' @param e_eta     Beta prior shape \code{a} for eta (default 1).
 #' @param f_eta     Beta prior shape \code{b} for eta (default 1).
-#' @param Tmax      Maximum Propp-Wilson doubling time (default 64).
-#' @param proposal_type  Eta proposal kernel: 0 = uniform, 1 = truncated
-#'   normal (default 1).
+#' @param Tmax      Maximum Propp-Wilson CFTP doubling horizon (default 64).
+#'   If CFTP does not coalesce within \code{Tmax} doublings, the eta proposal
+#'   is rejected (preserving exactness of the chain) and a warning is issued.
+#' @param proposal_type  Eta proposal kernel: \code{0} = logit-transformed
+#'   random walk (default 1 = same, kept for backward compatibility).
+#'   Since IMP-1, both values use a logit-scale Normal random walk,
+#'   mapping \eqn{\eta \in (0, \eta_{\mathrm{sd}})} to the real line and back
+#'   with the Jacobian correction included in the MH ratio.
+#'   Reference: Vihola (2012) \emph{Statistics and Computing} 22(5), 997--1008;
+#'   Roberts, Gelman & Gilks (1997) \emph{Ann. Appl. Prob.} 7(1), 110--120.
 #'
 #' @param v0_ggm    GGM SSVS spike variance (default \code{0.015^2}).
 #' @param v1_ggm    GGM SSVS slab variance (default \code{50^2 * 0.015^2}).
@@ -113,35 +132,77 @@
 #' @param gamma_init Optional initial gamma (integer vector of length p).
 #' @param alpha_init Optional initial intercept (numeric scalar).
 #'
+#' @param alg_type   Character string specifying the algorithm for the active
+#'   parameter-block update: \code{"MH"} = Metropolis-Hastings (default),
+#'   \code{"HMC"} = Hamiltonian Monte Carlo, or \code{"NUTS"} = No-U-Turn
+#'   Sampler. HMC and NUTS are only supported for
+#'   \code{outcome_type = "binary"} and \code{"TTE"}. For binary outcomes they
+#'   jointly update active \code{beta}, \code{alpha}, \code{tau}, and
+#'   \code{log(sigmasq)}; for TTE they jointly update active \code{beta},
+#'   \code{tau}, and \code{log(sigmasq)} with \code{alpha} fixed at 0.
+#' @param hmc_step_size Step size (epsilon) for the Hamiltonian Monte Carlo
+#'   (HMC) and No-U-Turn Sampler (NUTS) algorithms (default 0.1). Note that
+#'   NUTS adapts this automatically during burn-in.
+#' @param hmc_n_leapfrog Number of leapfrog steps for Hamiltonian Monte Carlo
+#'   (HMC) (default 10).
+#' @param nuts_max_treedepth Maximum tree depth for the No-U-Turn Sampler
+#'   (NUTS) algorithm (default 10).
+#'
 #' @return An object of class \code{"bvs"}, a named list with:
 #'   \describe{
-#'     \item{beta}{Matrix of posterior beta samples (niter x p).}
-#'     \item{gamma}{Posterior gamma samples (dense matrix or sparse list,
-#'       depending on backend/storage options).}
-#'     \item{gamma_pip}{Posterior inclusion probabilities for gamma
-#'       (length p).}
-#'     \item{alpha}{Vector of posterior alpha (intercept) samples.}
-#'     \item{sigmasq}{Vector of posterior sigma^2 samples.}
-#'     \item{eta1}{Vector of eta1 (dynamic or single-graph coupling) samples
-#'       (if applicable).}
-#'     \item{eta2}{Vector of eta2 (fixed coupling) samples
-#'       (if applicable).}
-#'     \item{Z_list}{List of GGM adjacency snapshots (if applicable).}
-#'     \item{Z_pip}{Posterior edge inclusion probabilities for GGM adjacency
-#'       (if applicable).}
-#'     \item{tau}{Matrix of posterior tau (z_dat coefficient) samples
-#'       (niter x q), or NULL if z_dat was not supplied.}
-#'     \item{call}{The matched call.}
-#'     \item{adj_type}{The adjacency type used.}
-#'     \item{sampler}{Character: \code{"mh"}.}
-#'     \item{outcome_type}{Character outcome model used (\code{"binary"},
-#'       \code{"continuous"}, \code{"TTE"}, or \code{"count"}).}
+#'     \item{beta}{Matrix of posterior beta samples (\code{niter x p}), or sparse
+#'       list when \code{store_beta = FALSE} in sparse backends.}
+#'     \item{gamma}{Posterior gamma samples (\code{niter x p} matrix or sparse
+#'       index list, depending on backend and storage options).}
+#'     \item{gamma_pip}{Posterior inclusion probabilities (length \code{p}), or
+#'       \code{NULL} when not recoverable.}
+#'     \item{alpha}{Numeric vector of posterior intercept samples (length \code{niter}).}
+#'     \item{sigmasq}{Numeric vector of posterior \eqn{\sigma^2} samples.}
+#'     \item{eta1}{Numeric vector of eta1 coupling parameter samples.}
+#'     \item{eta2}{Numeric vector of eta2 coupling samples (dual-network models only).}
+#'     \item{Z_list}{List of GGM adjacency snapshots (\code{store_Z_list = TRUE} only).}
+#'     \item{Z_pip}{Sparse matrix of GGM edge posterior inclusion probabilities
+#'       (\code{store_Z_pip = TRUE} and GGM \code{adj_type} only).}
+#'     \item{tau}{Matrix of posterior tau samples (\code{niter x q}), or
+#'       \code{NULL} if \code{z_dat} was not supplied.}
+#'     \item{call}{The matched function call.}
+#'     \item{adj_type}{Character adjacency type used.}
+#'     \item{sampler}{Character sampler identifier: \code{"mh"}, \code{"hmc"},
+#'       or \code{"nuts"}.}
+#'     \item{outcome_type}{Character outcome model: \code{"binary"},
+#'       \code{"continuous"}, \code{"TTE"}, or \code{"count"}.}
 #'     \item{niter}{Number of stored post-burn-in iterations.}
 #'     \item{burnin}{Number of burn-in iterations discarded.}
+#'     \item{thin}{Thinning interval used.}
 #'     \item{p}{Number of predictors in \code{X}.}
 #'     \item{ntau}{Number of always-included covariates in \code{z_dat}.}
 #'     \item{n}{Number of observations.}
 #'   }
+#'
+#' @references
+#'   Moller J, Pettitt AN, Reeves R, Berthelsen KK (2006). An efficient MCMC
+#'   method for distributions with intractable normalising constants.
+#'   \emph{Biometrika} 93(2), 451--458.
+#'
+#'   Polson NG, Scott JG, Windle J (2013). Bayesian inference for logistic
+#'   models using Polya-Gamma latent variables. \emph{JASA} 108(504),
+#'   1339--1349.
+#'
+#'   Hoffman MD, Gelman A (2014). The No-U-Turn sampler. \emph{JMLR} 15,
+#'   1593--1623.
+#'
+#'   Wang H (2012). Bayesian graphical lasso models and efficient posterior
+#'   computation. \emph{Bayesian Analysis} 7(4), 867--886.
+#'
+#'   Zanella G (2020). Informed proposals for local MCMC in discrete spaces.
+#'   \emph{JASA} 115(530), 852--865.
+#'
+#'   Vihola M (2012). Robust adaptive Metropolis algorithm with coerced
+#'   acceptance rate. \emph{Statistics and Computing} 22(5), 997--1008.
+#'
+#'   Vehtari A, Gelman A, Simpson D, Carpenter B, Burkner P-C (2021).
+#'   Rank-normalization, folding, and localization: An improved R-hat for
+#'   assessing convergence of MCMC. \emph{Bayesian Analysis} 16(2), 667--718.
 #'
 #' @details
 #' The outcome model depends on \code{outcome_type}:
@@ -249,6 +310,7 @@ bvs_mh <- function(X, y,
                    alpha0 = 0, beta0 = 0,
                    # Gamma / Ising
                    n_mh_gamma = 3L,
+                   use_lb_gamma = TRUE,
                    eta1_sd = 0.5, eta2_sd = 0.5,
                    mu_tilde = -4,
                    eta1_tilde = 0.5, eta2_tilde = 0.5,
@@ -267,7 +329,12 @@ bvs_mh <- function(X, y,
                    z_dat = NULL,
                    tau0 = 0,
                    htau = 1.5,
-                   tau_init = NULL) {
+                   tau_init = NULL,
+                   # Algorithm type for beta sampling
+                   alg_type = c("MH", "HMC", "NUTS"),
+                   hmc_step_size = 0.1,
+                   hmc_n_leapfrog = 10L,
+                   nuts_max_treedepth = 10L) {
   mc <- match.call()
   alpha_init_missing <- is.null(alpha_init)
   if (is.character(outcome_type) && length(outcome_type) == 1L && identical(outcome_type, "contiousou")) {
@@ -276,11 +343,32 @@ bvs_mh <- function(X, y,
   outcome_type <- match.arg(outcome_type)
   adj_type <- match.arg(adj_type)
   glasso_criterion <- match.arg(glasso_criterion)
+  alg_type <- match.arg(alg_type)
+
+  # HMC/NUTS only applicable for binary and TTE outcomes
+  if (alg_type %in% c("HMC", "NUTS") &&
+    !outcome_type %in% c("binary", "TTE")) {
+    warning(sprintf(
+      "alg_type='%s' is only supported for outcome_type='binary' or 'TTE'; falling back to 'MH'.",
+      alg_type
+    ), call. = FALSE)
+    alg_type <- "MH"
+  }
+  if (alg_type %in% c("HMC", "NUTS") && as.integer(n_thin_gb) > 1L) {
+    warning(
+      "For HMC/NUTS, n_thin_gb=1 is typically sufficient and more efficient; continuing with the provided value.",
+      call. = FALSE
+    )
+  }
 
   if (isTRUE(sparse) && !adj_type %in% c("ggm", "ggm_fixed")) {
     warning("sparse=TRUE is only implemented for adj_type='ggm' or 'ggm_fixed'; using dense backend.",
       call. = FALSE
     )
+  }
+  if (!is.logical(use_lb_gamma) || length(use_lb_gamma) != 1L ||
+      is.na(use_lb_gamma)) {
+    stop("'use_lb_gamma' must be TRUE or FALSE.", call. = FALSE)
   }
 
   # Dimensions
@@ -349,6 +437,12 @@ bvs_mh <- function(X, y,
   } else {
     stop("outcome_type must be one of 'binary', 'continuous', 'TTE', or 'count'.")
   }
+  # RMH-3: Validate niter/burnin/thin to prevent UB in C++
+  stopifnot(is.numeric(niter), length(niter) == 1, niter > 0, niter == as.integer(niter))
+  stopifnot(is.numeric(burnin), length(burnin) == 1, burnin >= 0, burnin == as.integer(burnin))
+  stopifnot(is.numeric(thin), length(thin) == 1, thin >= 1, thin == as.integer(thin))
+  if (niter %% thin != 0) warning("niter should be divisible by thin for correct storage.", call. = FALSE)
+
   n <- nrow(X)
   p <- ncol(X)
   if (length(y) != n) {
@@ -360,15 +454,16 @@ bvs_mh <- function(X, y,
 
   # Derived GGM defaults
   if (is.null(v1_ggm)) v1_ggm <- (50^2) * v0_ggm
-  if (is.null(pii_ggm)) pii_ggm <- 4 / (p - 1)
+  if (is.null(pii_ggm)) pii_ggm <- if (p > 1) 4 / (p - 1) else 0.5
 
   # Initialisation
   if (is.null(beta_init) || is.null(gamma_init) || is.null(alpha_init)) {
     if (use_sparse_backend) {
+      # RMH-2: Only overwrite NULL inits; preserve user-provided partial inits.
       init <- .init_ultra_sparse_state(y, p, beta_init, gamma_init, alpha_init, outcome_type)
-      beta_init <- init$beta_init
-      gamma_init <- init$gamma_init
-      alpha_init <- init$alpha_init
+      if (is.null(beta_init)) beta_init <- init$beta_init
+      if (is.null(gamma_init)) gamma_init <- init$gamma_init
+      if (is.null(alpha_init)) alpha_init <- init$alpha_init
     } else {
       init <- .init_mcmc(p, mu, nu0, sigmasq0, alpha0, beta0, h)
       if (is.null(beta_init)) beta_init <- init$beta_init
@@ -395,6 +490,27 @@ bvs_mh <- function(X, y,
     tau_init <- rep(tau0, ntau)
   }
 
+  # ---- Validate eta parameter usage ----
+  # For single-adjacency adj_types, only eta1_sd/eta1_tilde are passed to C++.
+  # Warn if the caller set eta2_sd (likely intending it to control the single
+  # adjacency) while leaving eta1_sd at its default, since eta2_sd is silently
+  # ignored by the single-network backend.
+  single_adj_types <- c("fixed", "glasso", "ggm")
+  if (adj_type %in% single_adj_types) {
+    default_eta1 <- formals(bvs_mh)$eta1_sd
+    default_eta2 <- formals(bvs_mh)$eta2_sd
+    if (!identical(eta2_sd, default_eta2) && identical(eta1_sd, default_eta1)) {
+      warning(sprintf(
+        paste0(
+          "adj_type='%s' uses a single-network backend that only accepts eta1_sd ",
+          "(current value: %.4f, default). eta2_sd=%.4f was set but will be ",
+          "IGNORED by the C++ sampler. Did you mean to set eta1_sd instead?"
+        ),
+        adj_type, eta1_sd, eta2_sd
+      ))
+    }
+  }
+
   # ---- Dispatch ----
   # Note: parameter names must match the C++ signatures exactly.
   # Most dense MH backends use (e, f); BayesLogit_DualNet_GGM and
@@ -419,7 +535,11 @@ bvs_mh <- function(X, y,
         alpha_in = alpha_init,
         Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
         event = event,
-        outcome_type = outcome_type
+        outcome_type = outcome_type,
+        alg_type = alg_type, hmc_step_size = hmc_step_size,
+        hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
+        nuts_max_treedepth = as.integer(nuts_max_treedepth),
+        use_lb_gamma = isTRUE(use_lb_gamma)
       )
     },
     "dual_fixed" = {
@@ -443,7 +563,11 @@ bvs_mh <- function(X, y,
         alpha_in = alpha_init,
         Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
         event = event,
-        outcome_type = outcome_type
+        outcome_type = outcome_type,
+        alg_type = alg_type, hmc_step_size = hmc_step_size,
+        hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
+        nuts_max_treedepth = as.integer(nuts_max_treedepth),
+        use_lb_gamma = isTRUE(use_lb_gamma)
       )
     },
     "glasso" = {
@@ -463,7 +587,11 @@ bvs_mh <- function(X, y,
         alpha_in = alpha_init,
         Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
         event = event,
-        outcome_type = outcome_type
+        outcome_type = outcome_type,
+        alg_type = alg_type, hmc_step_size = hmc_step_size,
+        hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
+        nuts_max_treedepth = as.integer(nuts_max_treedepth),
+        use_lb_gamma = isTRUE(use_lb_gamma)
       )
     },
     "glasso_fixed" = {
@@ -488,7 +616,11 @@ bvs_mh <- function(X, y,
         alpha_in = alpha_init,
         Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
         event = event,
-        outcome_type = outcome_type
+        outcome_type = outcome_type,
+        alg_type = alg_type, hmc_step_size = hmc_step_size,
+        hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
+        nuts_max_treedepth = as.integer(nuts_max_treedepth),
+        use_lb_gamma = isTRUE(use_lb_gamma)
       )
     },
     "ggm" = {
@@ -517,7 +649,12 @@ bvs_mh <- function(X, y,
           store_gamma = isTRUE(store_gamma),
           store_Z_list = isTRUE(store_Z_list),
           store_Z_pip = isTRUE(store_Z_pip),
-          outcome_type = outcome_type
+          use_lb_gamma = isTRUE(use_lb_gamma),
+          outcome_type = outcome_type,
+          alg_type = alg_type,
+          hmc_step_size = hmc_step_size,
+          hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
+          nuts_max_treedepth = as.integer(nuts_max_treedepth)
         )
 
         n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
@@ -542,7 +679,12 @@ bvs_mh <- function(X, y,
           alpha_in = alpha_init,
           Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
           event = event,
-          outcome_type = outcome_type
+          outcome_type = outcome_type,
+          alg_type = alg_type,
+          hmc_step_size = hmc_step_size,
+          hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
+          nuts_max_treedepth = as.integer(nuts_max_treedepth),
+          use_lb_gamma = isTRUE(use_lb_gamma)
         )
       }
     },
@@ -582,7 +724,12 @@ bvs_mh <- function(X, y,
           store_gamma = isTRUE(store_gamma),
           store_Z_list = isTRUE(store_Z_list),
           store_Z_pip = isTRUE(store_Z_pip),
-          outcome_type = outcome_type
+          use_lb_gamma = isTRUE(use_lb_gamma),
+          outcome_type = outcome_type,
+          alg_type = alg_type,
+          hmc_step_size = hmc_step_size,
+          hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
+          nuts_max_treedepth = as.integer(nuts_max_treedepth)
         )
 
         n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
@@ -611,7 +758,12 @@ bvs_mh <- function(X, y,
           alpha_in = alpha_init,
           Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
           event = event,
-          outcome_type = outcome_type
+          outcome_type = outcome_type,
+          alg_type = alg_type,
+          hmc_step_size = hmc_step_size,
+          hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
+          nuts_max_treedepth = as.integer(nuts_max_treedepth),
+          use_lb_gamma = isTRUE(use_lb_gamma)
         )
       }
     }
@@ -640,16 +792,18 @@ bvs_mh <- function(X, y,
     eta2 = result$eta2,
     Z_list = result$Z_list,
     Z_pip = result$Z_pip,
+    hmc_nuts_diagnostics = result$hmc_nuts_diagnostics,
     gamma_pip = gamma_pip,
     call = mc,
     adj_type = adj_type,
-    sampler = "mh",
+    sampler = tolower(alg_type),
     outcome_type = outcome_type,
     niter = niter,
     burnin = burnin,
     p = p,
     ntau = ntau,
-    n = n
+    n = n,
+    thin = thin                # SUM-2: pass thin for coda::mcmc conversion
   )
   class(out) <- "bvs"
   out

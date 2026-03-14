@@ -448,7 +448,10 @@ struct PCGConfig {
   int max_iter;
   int pcg_threshold; // use PCG when p_active > this
 
-  PCGConfig() : tol(1e-6), max_iter(200), pcg_threshold(500) {}
+  // IMP-5: Relaxed CG tolerance from 1e-6 to 1e-4 for MCMC.
+  // Monte Carlo error dominates CG approximation error; saves ~30-50% CG iterations.
+  // Reference: Nishimura & Suchard (2022), Parker & Fox (2024).
+  PCGConfig() : tol(1e-4), max_iter(200), pcg_threshold(500) {}
   PCGConfig(double t, int m, int th) : tol(t), max_iter(m), pcg_threshold(th) {}
 };
 
@@ -458,7 +461,9 @@ struct PCGConfig {
 inline bool pcg_sample_beta(arma::vec &beta_out, const arma::mat &X_act,
                              const arma::vec &omega_pg, const arma::vec &kappa,
                              double alpha, double inv_sigmasq,
-                             const PCGConfig &cfg) {
+                             const PCGConfig &cfg,
+                             const arma::vec *z_offset = nullptr,
+                             double beta0 = 0.0) {
   int n = static_cast<int>(X_act.n_rows);
   int p_act = static_cast<int>(X_act.n_cols);
 
@@ -488,17 +493,33 @@ inline bool pcg_sample_beta(arma::vec &beta_out, const arma::mat &X_act,
     return result;
   };
 
-  // RHS: X_act' * (kappa - omega * alpha)
+  // RHS: X_act' * (kappa - omega * alpha - omega * z_offset)
+  //      + (beta0 / sigmasq) * 1 = beta0 * inv_sigmasq * 1
   arma::vec z_star = kappa - omega_pg * alpha;
-  arma::vec rhs = X_act.t() * z_star;
+  if (z_offset != nullptr && static_cast<int>(z_offset->n_elem) == n) {
+    z_star -= omega_pg % (*z_offset);
+  }
+  arma::vec rhs = X_act.t() * z_star +
+                  (beta0 * inv_sigmasq) * arma::ones<arma::vec>(p_act);
 
-  // Noise for sampling: b = rhs + sqrt(M) .* z where z ~ N(0,I)
-  arma::vec z_noise = arma::randn<arma::vec>(p_act);
-  arma::vec noise = arma::sqrt(M) % z_noise;
-  arma::vec b = rhs + noise;
+  // Correct CG sampling noise (Nishimura-Suchard 2022, JASA):
+  // Sample v1 ~ N(0, X'*Omega*X) via v1 = X' * (sqrt(omega) .* z1)
+  // Sample v2 ~ N(0, inv_sigmasq * I) via v2 = sqrt(inv_sigmasq) * z2
+  // Then b = rhs + v1 + v2 gives the correct posterior sample when solved.
+  arma::vec z1 = arma::randn<arma::vec>(n);
+  arma::vec v1 = X_act.t() * (arma::sqrt(omega_pg) % z1);
+  arma::vec z2 = arma::randn<arma::vec>(p_act);
+  arma::vec v2 = std::sqrt(inv_sigmasq) * z2;
+  arma::vec b = rhs + v1 + v2;
 
   // PCG solve: P * beta = b
-  arma::vec x = arma::zeros<arma::vec>(p_act); // initial guess
+  // Warm-start CG from the previous active beta draw when available.
+  arma::vec x;
+  if (static_cast<int>(beta_out.n_elem) == p_act && beta_out.is_finite()) {
+    x = beta_out;
+  } else {
+    x = arma::zeros<arma::vec>(p_act);
+  }
   arma::vec r = b - Pv(x);
   arma::vec z = r / M;                          // preconditioner solve
   arma::vec p_cg = z;
@@ -507,9 +528,15 @@ inline bool pcg_sample_beta(arma::vec &beta_out, const arma::mat &X_act,
   if (b_norm < 1e-16)
     b_norm = 1.0;
 
+  bool converged = false;
   for (int iter = 0; iter < cfg.max_iter; ++iter) {
-    if (arma::norm(r) / b_norm < cfg.tol)
+    if (arma::norm(r) / b_norm < cfg.tol) {
+      converged = true;
       break;
+    }
+
+    // BPG-4: Guard against negative rz from finite-precision error
+    if (rz < 1e-30) break;
 
     arma::vec Ap = Pv(p_cg);
     double pAp = arma::dot(p_cg, Ap);
@@ -529,6 +556,23 @@ inline bool pcg_sample_beta(arma::vec &beta_out, const arma::mat &X_act,
     rz = rz_new;
   }
 
+  // IMP-3: Cholesky direct-solve fallback when CG fails to converge.
+  // Non-convergence biases the posterior by sampling from wrong Gaussian.
+  // Fall back to exact Cholesky solve to preserve correctness.
+  if (!converged && p_act <= 2000) {
+    arma::mat P_dense = X_act.t() * arma::diagmat(omega_pg) * X_act;
+    P_dense.diag() += inv_sigmasq;
+    arma::mat L;
+    bool chol_ok = arma::chol(L, arma::symmatu(P_dense));
+    if (chol_ok) {
+      // Solve P * beta = b via Cholesky
+      arma::vec tmp = arma::solve(arma::trimatl(L.t()), b,
+                                  arma::solve_opts::fast);
+      x = arma::solve(arma::trimatu(L), tmp, arma::solve_opts::fast);
+    }
+    // else: keep CG approximate solution as best effort
+  }
+
   beta_out = x;
   bvs_dadj::sanitize_vec_inplace(beta_out, -30.0, 30.0, 0.0);
   return true;
@@ -540,7 +584,9 @@ inline bool pcg_sample_beta_sparse(arma::vec &beta_out,
                                     const std::vector<int> &active_idx,
                                     const arma::vec &omega_pg,
                                     const arma::vec &kappa, double alpha,
-                                    double inv_sigmasq, const PCGConfig &cfg) {
+                                    double inv_sigmasq, const PCGConfig &cfg,
+                                    const arma::vec *z_offset = nullptr,
+                                    double beta0 = 0.0) {
   int n = static_cast<int>(X.n_rows);
   int p_act = static_cast<int>(active_idx.size());
 
@@ -549,19 +595,141 @@ inline bool pcg_sample_beta_sparse(arma::vec &beta_out,
     return true;
   }
 
-  // Build dense X_act from sparse columns
-  arma::mat X_act(n, p_act, arma::fill::zeros);
+  // Truly sparse PCG: avoid materializing dense X_act
+  // Diagonal preconditioner: M[j] = sum_i(omega_i * X_ij^2) + inv_sigmasq
+  arma::vec M(p_act);
+  for (int k = 0; k < p_act; ++k) {
+    double s = 0.0;
+    int j = active_idx[k];
+    for (arma::sp_mat::const_col_iterator it = X.begin_col(j);
+         it != X.end_col(j); ++it) {
+      double val = (*it);
+      s += omega_pg(it.row()) * val * val;
+    }
+    M(k) = std::max(s + inv_sigmasq, 1e-12);
+  }
+
+  // Sparse precision-times-vector (no dense X_act formed)
+  auto Pv = [&](const arma::vec &v) -> arma::vec {
+    // Xv = X_act * v (sparse, O(nnz_active))
+    arma::vec Xv(n, arma::fill::zeros);
+    for (int k = 0; k < p_act; ++k) {
+      int j = active_idx[k];
+      for (arma::sp_mat::const_col_iterator it = X.begin_col(j);
+           it != X.end_col(j); ++it) {
+        Xv(it.row()) += (*it) * v(k);
+      }
+    }
+    Xv %= omega_pg;
+    // result = X_act' * Xv (sparse, O(nnz_active))
+    arma::vec result(p_act, arma::fill::zeros);
+    for (int k = 0; k < p_act; ++k) {
+      int j = active_idx[k];
+      for (arma::sp_mat::const_col_iterator it = X.begin_col(j);
+           it != X.end_col(j); ++it) {
+        result(k) += (*it) * Xv(it.row());
+      }
+    }
+    result += inv_sigmasq * v;
+    return result;
+  };
+
+  // RHS: X_act' * (kappa - omega * alpha - omega * z_offset)
+  //      + (beta0 / sigmasq) * 1 = beta0 * inv_sigmasq * 1
+  arma::vec z_star = kappa - omega_pg * alpha;
+  if (z_offset != nullptr && static_cast<int>(z_offset->n_elem) == n) {
+    z_star -= omega_pg % (*z_offset);
+  }
+  arma::vec rhs(p_act, arma::fill::zeros);
   for (int k = 0; k < p_act; ++k) {
     int j = active_idx[k];
     for (arma::sp_mat::const_col_iterator it = X.begin_col(j);
          it != X.end_col(j); ++it) {
-      X_act(it.row(), k) = (*it);
+      rhs(k) += (*it) * z_star(it.row());
     }
   }
 
-  // Delegate to dense PCG
-  return pcg_sample_beta(beta_out, X_act, omega_pg, kappa, alpha, inv_sigmasq,
-                          cfg);
+  rhs += (beta0 * inv_sigmasq) * arma::ones<arma::vec>(p_act);
+
+  // Correct CG sampling noise (Nishimura-Suchard 2022):
+  arma::vec z1 = arma::randn<arma::vec>(n);
+  arma::vec sqrt_omega = arma::sqrt(omega_pg);
+  arma::vec v1(p_act, arma::fill::zeros);
+  for (int k = 0; k < p_act; ++k) {
+    int j = active_idx[k];
+    for (arma::sp_mat::const_col_iterator it = X.begin_col(j);
+         it != X.end_col(j); ++it) {
+      v1(k) += (*it) * (sqrt_omega(it.row()) * z1(it.row()));
+    }
+  }
+  arma::vec z2 = arma::randn<arma::vec>(p_act);
+  arma::vec v2 = std::sqrt(inv_sigmasq) * z2;
+  arma::vec b_cg = rhs + v1 + v2;
+
+  // PCG solve: P * beta = b
+  // Warm-start CG from the previous active beta draw when available.
+  arma::vec x;
+  if (static_cast<int>(beta_out.n_elem) == p_act && beta_out.is_finite()) {
+    x = beta_out;
+  } else {
+    x = arma::zeros<arma::vec>(p_act);
+  }
+  arma::vec r = b_cg - Pv(x);
+  arma::vec z_cg = r / M;
+  arma::vec p_cg = z_cg;
+  double rz = arma::dot(r, z_cg);
+  double b_norm = arma::norm(b_cg);
+  if (b_norm < 1e-16) b_norm = 1.0;
+
+  bool converged = false;
+  for (int it = 0; it < cfg.max_iter; ++it) {
+    if (arma::norm(r) / b_norm < cfg.tol) {
+      converged = true;
+      break;
+    }
+
+    arma::vec Ap = Pv(p_cg);
+    double pAp = arma::dot(p_cg, Ap);
+    if (pAp < 1e-30 || rz < 1e-30) break;
+
+    double alpha_cg = rz / pAp;
+    x += alpha_cg * p_cg;
+    r -= alpha_cg * Ap;
+
+    arma::vec z_new = r / M;
+    double rz_new = arma::dot(r, z_new);
+    double beta_cg = rz_new / std::max(rz, 1e-30);
+
+    p_cg = z_new + beta_cg * p_cg;
+    z_cg = z_new;
+    rz = rz_new;
+  }
+
+  // IMP-3: Cholesky direct-solve fallback when sparse CG fails to converge.
+  // For moderate p_act, materialize P and solve exactly to avoid posterior bias.
+  if (!converged && p_act <= 2000) {
+    arma::mat X_act_dense(n, p_act, arma::fill::zeros);
+    for (int k = 0; k < p_act; ++k) {
+      int j = active_idx[k];
+      for (arma::sp_mat::const_col_iterator cit = X.begin_col(j);
+           cit != X.end_col(j); ++cit) {
+        X_act_dense(cit.row(), k) = (*cit);
+      }
+    }
+    arma::mat P_dense = X_act_dense.t() * arma::diagmat(omega_pg) * X_act_dense;
+    P_dense.diag() += inv_sigmasq;
+    arma::mat L;
+    bool chol_ok = arma::chol(L, arma::symmatu(P_dense));
+    if (chol_ok) {
+      arma::vec tmp = arma::solve(arma::trimatl(L.t()), b_cg,
+                                  arma::solve_opts::fast);
+      x = arma::solve(arma::trimatu(L), tmp, arma::solve_opts::fast);
+    }
+  }
+
+  beta_out = x;
+  bvs_dadj::sanitize_vec_inplace(beta_out, -30.0, 30.0, 0.0);
+  return true;
 }
 
 // =============================================================================
@@ -618,30 +786,76 @@ inline void uncollapsed_gamma_sweep_single(
     double log_prior_odds = mu + eta * neigh_sum;
 
     if (g_curr == 0) {
-      // Propose activation: sample beta_j from prior
-      double b_prop = R::rnorm(beta0, sd_beta);
+      // BPG-3: Data-informed activation proposal via 1-step Laplace approx.
+      // Instead of prior proposal N(beta0, sigmasq), use approximate posterior
+      // mode as proposal center. This dramatically improves acceptance for
+      // variables with large true effects.
+      double inv_sigmasq = 1.0 / std::max(sigmasq, 1e-10);
+      const arma::uword n = X.n_rows;
+      double xj_w_xj = 0.0;
+      double xj_resid = 0.0;
+      for (arma::uword i = 0; i < n; ++i) {
+        double psi = alpha_val + Xb(i);
+        psi = bvs_dadj::clamp_finite(psi, -30.0, 30.0, 0.0);
+        double pi_i = 1.0 / (1.0 + std::exp(-psi));
+        double wi = pi_i * (1.0 - pi_i);
+        xj_w_xj += X(i, j) * X(i, j) * wi;
+        xj_resid += X(i, j) * (y(i) - pi_i);
+      }
+      double prec_j = xj_w_xj + inv_sigmasq;
+      double mean_j = (xj_resid + beta0 * inv_sigmasq) / prec_j;
+      double sd_j = 1.0 / std::sqrt(std::max(prec_j, 1e-12));
+      double b_prop = R::rnorm(mean_j, sd_j);
       b_prop = bvs_dadj::clamp_finite(b_prop, -30.0, 30.0, 0.0);
-      double db = b_prop - 0.0; // b_curr is 0
+      double db = b_prop;
       double ll_diff = dense_column_ll_diff(y, Xb, alpha_val, X, j, db);
-      double log_ratio = ll_diff + log_prior_odds;
+      // MH correction: subtract proposal ratio
+      // q(b_prop | 0->1) = dnorm(b_prop, mean_j, sd_j)
+      // q(0 | 1->0) = 1 (deterministic)
+      // Forward: log q(b_prop) for activation
+      double log_q_fwd = -0.5 * std::log(2.0 * M_PI) - std::log(sd_j) -
+                          0.5 * (b_prop - mean_j) * (b_prop - mean_j) / (sd_j * sd_j);
+      // Prior: log p(b_prop) = log N(b_prop | beta0, sigmasq)
+      double log_prior_b = -0.5 * std::log(2.0 * M_PI * sigmasq) -
+                            0.5 * (b_prop - beta0) * (b_prop - beta0) / sigmasq;
+      double log_ratio = ll_diff + log_prior_odds + log_prior_b - log_q_fwd;
 
       if (bvs_dadj::safe_mh_accept(log_ratio)) {
         gamma[j] = 1;
         beta(j) = b_prop;
-        // Update Xb incrementally
-        for (arma::uword i = 0; i < X.n_rows; ++i)
+        for (arma::uword i = 0; i < n; ++i)
           Xb(i) += db * X(i, j);
       }
     } else {
       // Propose deactivation: set beta_j = 0
+      // Reverse proposal ratio: q(b_curr | 0->1) from Laplace approx at b_curr
+      double inv_sigmasq = 1.0 / std::max(sigmasq, 1e-10);
+      const arma::uword n = X.n_rows;
+      double xj_w_xj = 0.0;
+      double xj_resid = 0.0;
+      for (arma::uword i = 0; i < n; ++i) {
+        double psi = alpha_val + Xb(i) - b_curr * X(i, j);
+        psi = bvs_dadj::clamp_finite(psi, -30.0, 30.0, 0.0);
+        double pi_i = 1.0 / (1.0 + std::exp(-psi));
+        double wi = pi_i * (1.0 - pi_i);
+        xj_w_xj += X(i, j) * X(i, j) * wi;
+        xj_resid += X(i, j) * (y(i) - pi_i);
+      }
+      double prec_j = xj_w_xj + inv_sigmasq;
+      double mean_j = (xj_resid + beta0 * inv_sigmasq) / prec_j;
+      double sd_j = 1.0 / std::sqrt(std::max(prec_j, 1e-12));
       double db = 0.0 - b_curr;
       double ll_diff = dense_column_ll_diff(y, Xb, alpha_val, X, j, db);
-      double log_ratio = ll_diff - log_prior_odds;
+      double log_q_rev = -0.5 * std::log(2.0 * M_PI) - std::log(sd_j) -
+                          0.5 * (b_curr - mean_j) * (b_curr - mean_j) / (sd_j * sd_j);
+      double log_prior_b = -0.5 * std::log(2.0 * M_PI * sigmasq) -
+                            0.5 * (b_curr - beta0) * (b_curr - beta0) / sigmasq;
+      double log_ratio = ll_diff - log_prior_odds - log_prior_b + log_q_rev;
 
       if (bvs_dadj::safe_mh_accept(log_ratio)) {
         gamma[j] = 0;
         beta(j) = 0.0;
-        for (arma::uword i = 0; i < X.n_rows; ++i)
+        for (arma::uword i = 0; i < n; ++i)
           Xb(i) += db * X(i, j);
       }
     }
@@ -672,27 +886,63 @@ inline void uncollapsed_gamma_sweep_dual(
     double log_prior_odds = mu + eta1 * neigh1 + eta2 * neigh2;
 
     if (g_curr == 0) {
-      double b_prop = R::rnorm(beta0, sd_beta);
+      // BPG-3: Data-informed activation proposal (dual adjacency)
+      double inv_sigmasq = 1.0 / std::max(sigmasq, 1e-10);
+      const arma::uword n = X.n_rows;
+      double xj_w_xj = 0.0, xj_resid = 0.0;
+      for (arma::uword i = 0; i < n; ++i) {
+        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i), -30.0, 30.0, 0.0);
+        double pi_i = 1.0 / (1.0 + std::exp(-psi));
+        double wi = pi_i * (1.0 - pi_i);
+        xj_w_xj += X(i, j) * X(i, j) * wi;
+        xj_resid += X(i, j) * (y(i) - pi_i);
+      }
+      double prec_j = xj_w_xj + inv_sigmasq;
+      double mean_j = (xj_resid + beta0 * inv_sigmasq) / prec_j;
+      double sd_j = 1.0 / std::sqrt(std::max(prec_j, 1e-12));
+      double b_prop = R::rnorm(mean_j, sd_j);
       b_prop = bvs_dadj::clamp_finite(b_prop, -30.0, 30.0, 0.0);
       double db = b_prop;
       double ll_diff = dense_column_ll_diff(y, Xb, alpha_val, X, j, db);
-      double log_ratio = ll_diff + log_prior_odds;
+      double log_q_fwd = -0.5 * std::log(2.0 * M_PI) - std::log(sd_j) -
+                          0.5 * (b_prop - mean_j) * (b_prop - mean_j) / (sd_j * sd_j);
+      double log_prior_b = -0.5 * std::log(2.0 * M_PI * sigmasq) -
+                            0.5 * (b_prop - beta0) * (b_prop - beta0) / sigmasq;
+      double log_ratio = ll_diff + log_prior_odds + log_prior_b - log_q_fwd;
 
       if (bvs_dadj::safe_mh_accept(log_ratio)) {
         gamma[j] = 1;
         beta(j) = b_prop;
-        for (arma::uword i = 0; i < X.n_rows; ++i)
+        for (arma::uword i = 0; i < n; ++i)
           Xb(i) += db * X(i, j);
       }
     } else {
+      // BPG-3: Deactivation with reverse proposal correction
+      double inv_sigmasq = 1.0 / std::max(sigmasq, 1e-10);
+      const arma::uword n = X.n_rows;
+      double xj_w_xj = 0.0, xj_resid = 0.0;
+      for (arma::uword i = 0; i < n; ++i) {
+        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i) - b_curr * X(i, j), -30.0, 30.0, 0.0);
+        double pi_i = 1.0 / (1.0 + std::exp(-psi));
+        double wi = pi_i * (1.0 - pi_i);
+        xj_w_xj += X(i, j) * X(i, j) * wi;
+        xj_resid += X(i, j) * (y(i) - pi_i);
+      }
+      double prec_j = xj_w_xj + inv_sigmasq;
+      double mean_j = (xj_resid + beta0 * inv_sigmasq) / prec_j;
+      double sd_j = 1.0 / std::sqrt(std::max(prec_j, 1e-12));
       double db = -b_curr;
       double ll_diff = dense_column_ll_diff(y, Xb, alpha_val, X, j, db);
-      double log_ratio = ll_diff - log_prior_odds;
+      double log_q_rev = -0.5 * std::log(2.0 * M_PI) - std::log(sd_j) -
+                          0.5 * (b_curr - mean_j) * (b_curr - mean_j) / (sd_j * sd_j);
+      double log_prior_b = -0.5 * std::log(2.0 * M_PI * sigmasq) -
+                            0.5 * (b_curr - beta0) * (b_curr - beta0) / sigmasq;
+      double log_ratio = ll_diff - log_prior_odds - log_prior_b + log_q_rev;
 
       if (bvs_dadj::safe_mh_accept(log_ratio)) {
         gamma[j] = 0;
         beta(j) = 0.0;
-        for (arma::uword i = 0; i < X.n_rows; ++i)
+        for (arma::uword i = 0; i < n; ++i)
           Xb(i) += db * X(i, j);
       }
     }
@@ -725,23 +975,38 @@ inline void uncollapsed_gamma_sweep_single_sparse(
     double log_prior_odds = mu + eta * neigh_sum;
 
     if (g_curr == 0) {
-      double b_prop = R::rnorm(beta0, sd_beta);
+      // BPG-3: Data-informed sparse activation proposal
+      double inv_sigmasq = 1.0 / std::max(sigmasq, 1e-10);
+      arma::uword start = col_ptr[j], end = col_ptr[j + 1];
+      double xj_w_xj = 0.0, xj_resid = 0.0;
+      for (arma::uword idx = start; idx < end; ++idx) {
+        int i = static_cast<int>(row_idx[idx]);
+        double xij = xvals[idx];
+        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i), -30.0, 30.0, 0.0);
+        double pi_i = 1.0 / (1.0 + std::exp(-psi));
+        xj_w_xj += xij * xij * pi_i * (1.0 - pi_i);
+        xj_resid += xij * (y(i) - pi_i);
+      }
+      double prec_j = xj_w_xj + inv_sigmasq;
+      double mean_j = (xj_resid + beta0 * inv_sigmasq) / prec_j;
+      double sd_j = 1.0 / std::sqrt(std::max(prec_j, 1e-12));
+      double b_prop = R::rnorm(mean_j, sd_j);
       b_prop = bvs_dadj::clamp_finite(b_prop, -30.0, 30.0, 0.0);
       double db = b_prop;
 
-      // Sparse column log-likelihood difference
       double ll_diff = 0.0;
-      arma::uword start = col_ptr[j], end = col_ptr[j + 1];
       for (arma::uword idx = start; idx < end; ++idx) {
         int i = static_cast<int>(row_idx[idx]);
         double xij = xvals[idx];
         double psi_old = alpha_val + Xb(i);
         double psi_new = psi_old + db * xij;
-        ll_diff +=
-            loglik_obs_stable(y(i), psi_new) - loglik_obs_stable(y(i), psi_old);
+        ll_diff += loglik_obs_stable(y(i), psi_new) - loglik_obs_stable(y(i), psi_old);
       }
-
-      double log_ratio = ll_diff + log_prior_odds;
+      double log_q_fwd = -0.5 * std::log(2.0 * M_PI) - std::log(sd_j) -
+                          0.5 * (b_prop - mean_j) * (b_prop - mean_j) / (sd_j * sd_j);
+      double log_prior_b = -0.5 * std::log(2.0 * M_PI * sigmasq) -
+                            0.5 * (b_prop - beta0) * (b_prop - beta0) / sigmasq;
+      double log_ratio = ll_diff + log_prior_odds + log_prior_b - log_q_fwd;
       if (bvs_dadj::safe_mh_accept(log_ratio)) {
         gamma[j] = 1;
         beta(j) = b_prop;
@@ -749,20 +1014,36 @@ inline void uncollapsed_gamma_sweep_single_sparse(
           Xb(static_cast<int>(row_idx[idx])) += db * xvals[idx];
       }
     } else {
+      // BPG-3: Sparse deactivation with reverse Laplace correction
+      double inv_sigmasq = 1.0 / std::max(sigmasq, 1e-10);
+      arma::uword start = col_ptr[j], end = col_ptr[j + 1];
+      double xj_w_xj = 0.0, xj_resid = 0.0;
+      for (arma::uword idx = start; idx < end; ++idx) {
+        int i = static_cast<int>(row_idx[idx]);
+        double xij = xvals[idx];
+        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i) - b_curr * xij, -30.0, 30.0, 0.0);
+        double pi_i = 1.0 / (1.0 + std::exp(-psi));
+        xj_w_xj += xij * xij * pi_i * (1.0 - pi_i);
+        xj_resid += xij * (y(i) - pi_i);
+      }
+      double prec_j = xj_w_xj + inv_sigmasq;
+      double mean_j = (xj_resid + beta0 * inv_sigmasq) / prec_j;
+      double sd_j = 1.0 / std::sqrt(std::max(prec_j, 1e-12));
       double db = -b_curr;
 
       double ll_diff = 0.0;
-      arma::uword start = col_ptr[j], end = col_ptr[j + 1];
       for (arma::uword idx = start; idx < end; ++idx) {
         int i = static_cast<int>(row_idx[idx]);
         double xij = xvals[idx];
         double psi_old = alpha_val + Xb(i);
         double psi_new = psi_old + db * xij;
-        ll_diff +=
-            loglik_obs_stable(y(i), psi_new) - loglik_obs_stable(y(i), psi_old);
+        ll_diff += loglik_obs_stable(y(i), psi_new) - loglik_obs_stable(y(i), psi_old);
       }
-
-      double log_ratio = ll_diff - log_prior_odds;
+      double log_q_rev = -0.5 * std::log(2.0 * M_PI) - std::log(sd_j) -
+                          0.5 * (b_curr - mean_j) * (b_curr - mean_j) / (sd_j * sd_j);
+      double log_prior_b = -0.5 * std::log(2.0 * M_PI * sigmasq) -
+                            0.5 * (b_curr - beta0) * (b_curr - beta0) / sigmasq;
+      double log_ratio = ll_diff - log_prior_odds - log_prior_b + log_q_rev;
       if (bvs_dadj::safe_mh_accept(log_ratio)) {
         gamma[j] = 0;
         beta(j) = 0.0;
@@ -800,42 +1081,72 @@ inline void uncollapsed_gamma_sweep_dual_sparse(
     double log_prior_odds = mu + eta1 * neigh1 + eta2 * neigh2;
 
     if (g_curr == 0) {
-      double b_prop = R::rnorm(beta0, sd_beta);
+      // BPG-3: Data-informed sparse dual activation proposal
+      double inv_sigmasq = 1.0 / std::max(sigmasq, 1e-10);
+      arma::uword start = col_ptr[j], end = col_ptr[j + 1];
+      double xj_w_xj = 0.0, xj_resid = 0.0;
+      for (arma::uword idx = start; idx < end; ++idx) {
+        int i = static_cast<int>(row_idx[idx]);
+        double xij = xvals[idx];
+        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i), -30.0, 30.0, 0.0);
+        double pi_i = 1.0 / (1.0 + std::exp(-psi));
+        xj_w_xj += xij * xij * pi_i * (1.0 - pi_i);
+        xj_resid += xij * (y(i) - pi_i);
+      }
+      double prec_j = xj_w_xj + inv_sigmasq;
+      double mean_j = (xj_resid + beta0 * inv_sigmasq) / prec_j;
+      double sd_j = 1.0 / std::sqrt(std::max(prec_j, 1e-12));
+      double b_prop = R::rnorm(mean_j, sd_j);
       b_prop = bvs_dadj::clamp_finite(b_prop, -30.0, 30.0, 0.0);
       double db = b_prop;
 
       double ll_diff = 0.0;
-      arma::uword start = col_ptr[j], end = col_ptr[j + 1];
       for (arma::uword idx = start; idx < end; ++idx) {
         int i = static_cast<int>(row_idx[idx]);
         double xij = xvals[idx];
         double psi_old = alpha_val + Xb(i);
-        double psi_new = psi_old + db * xij;
-        ll_diff +=
-            loglik_obs_stable(y(i), psi_new) - loglik_obs_stable(y(i), psi_old);
+        ll_diff += loglik_obs_stable(y(i), psi_old + db * xij) - loglik_obs_stable(y(i), psi_old);
       }
-
-      if (bvs_dadj::safe_mh_accept(ll_diff + log_prior_odds)) {
+      double log_q_fwd = -0.5 * std::log(2.0 * M_PI) - std::log(sd_j) -
+                          0.5 * (b_prop - mean_j) * (b_prop - mean_j) / (sd_j * sd_j);
+      double log_prior_b = -0.5 * std::log(2.0 * M_PI * sigmasq) -
+                            0.5 * (b_prop - beta0) * (b_prop - beta0) / sigmasq;
+      if (bvs_dadj::safe_mh_accept(ll_diff + log_prior_odds + log_prior_b - log_q_fwd)) {
         gamma[j] = 1;
         beta(j) = b_prop;
         for (arma::uword idx = start; idx < end; ++idx)
           Xb(static_cast<int>(row_idx[idx])) += db * xvals[idx];
       }
     } else {
+      // BPG-3: Sparse dual deactivation with reverse Laplace correction
+      double inv_sigmasq = 1.0 / std::max(sigmasq, 1e-10);
+      arma::uword start = col_ptr[j], end = col_ptr[j + 1];
+      double xj_w_xj = 0.0, xj_resid = 0.0;
+      for (arma::uword idx = start; idx < end; ++idx) {
+        int i = static_cast<int>(row_idx[idx]);
+        double xij = xvals[idx];
+        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i) - b_curr * xij, -30.0, 30.0, 0.0);
+        double pi_i = 1.0 / (1.0 + std::exp(-psi));
+        xj_w_xj += xij * xij * pi_i * (1.0 - pi_i);
+        xj_resid += xij * (y(i) - pi_i);
+      }
+      double prec_j = xj_w_xj + inv_sigmasq;
+      double mean_j = (xj_resid + beta0 * inv_sigmasq) / prec_j;
+      double sd_j = 1.0 / std::sqrt(std::max(prec_j, 1e-12));
       double db = -b_curr;
 
       double ll_diff = 0.0;
-      arma::uword start = col_ptr[j], end = col_ptr[j + 1];
       for (arma::uword idx = start; idx < end; ++idx) {
         int i = static_cast<int>(row_idx[idx]);
         double xij = xvals[idx];
         double psi_old = alpha_val + Xb(i);
-        double psi_new = psi_old + db * xij;
-        ll_diff +=
-            loglik_obs_stable(y(i), psi_new) - loglik_obs_stable(y(i), psi_old);
+        ll_diff += loglik_obs_stable(y(i), psi_old + db * xij) - loglik_obs_stable(y(i), psi_old);
       }
-
-      if (bvs_dadj::safe_mh_accept(ll_diff - log_prior_odds)) {
+      double log_q_rev = -0.5 * std::log(2.0 * M_PI) - std::log(sd_j) -
+                          0.5 * (b_curr - mean_j) * (b_curr - mean_j) / (sd_j * sd_j);
+      double log_prior_b = -0.5 * std::log(2.0 * M_PI * sigmasq) -
+                            0.5 * (b_curr - beta0) * (b_curr - beta0) / sigmasq;
+      if (bvs_dadj::safe_mh_accept(ll_diff - log_prior_odds - log_prior_b + log_q_rev)) {
         gamma[j] = 0;
         beta(j) = 0.0;
         for (arma::uword idx = start; idx < end; ++idx)

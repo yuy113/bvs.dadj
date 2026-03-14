@@ -58,17 +58,30 @@
 #'
 #' @param n_mh_gamma  Number of gamma MH updates per MCMC iteration
 #'   (default 3; used by GGM/sparse backends).
-#' @param eta1_sd   Upper bound for eta1 (single-eta models or dual models, default 0.5).
-#' @param eta2_sd   Upper bound for eta2 (dual-eta models, default 0.5).
-#' @param mu_tilde  Auxiliary MRF external field for Moller update
-#'   (default -4).
-#' @param eta1_tilde Auxiliary eta1 coupling (default 0.5).
-#' @param eta2_tilde Auxiliary eta2 coupling (default 0.5).
+#' @param use_lb_gamma Logical; use Zanella (2020) locally-balanced
+#'   \eqn{g(t)=\sqrt{t}} coordinate proposals for gamma updates across
+#'   \emph{all 12 backends} (default \code{TRUE}). Proposal weights are
+#'   \eqn{w_j = \exp(0.5 \cdot \mathrm{clip}[(1-2\gamma_j)(\mu + \eta N_j)])};
+#'   the MH ratio is corrected by the log proposal ratio.
+#'   Set \code{FALSE} to revert to uniform-coordinate baseline.
+#'   Reference: Zanella (2020) \emph{JASA} 115(530), 852--865.
+#' @param eta1_sd   Upper bound for eta1 (Uniform(0, eta1_sd) prior; default 0.5).
+#' @param eta2_sd   Upper bound for eta2 (dual-eta models; Uniform(0, eta2_sd) prior; default 0.5).
+#' @param mu_tilde  Auxiliary MRF external field for Moller/Exchange update
+#'   (default -4; set equal to mu to use the exact Exchange Algorithm).
+#' @param eta1_tilde Auxiliary eta1 coupling for the Exchange Algorithm (default 0.5).
+#' @param eta2_tilde Auxiliary eta2 coupling for the Exchange Algorithm (default 0.5).
 #' @param e_eta     Beta prior shape \code{a} for eta (default 1).
 #' @param f_eta     Beta prior shape \code{b} for eta (default 1).
-#' @param Tmax      Maximum Propp-Wilson doubling time (default 64).
-#' @param proposal_type  Eta proposal kernel: 0 = uniform, 1 = truncated
-#'   normal (default 1).
+#' @param Tmax      Maximum Propp-Wilson CFTP doubling horizon (default 64).
+#'   If CFTP does not coalesce within \code{Tmax} doublings, the eta proposal
+#'   is rejected (preserving exactness of the chain) and a warning is issued.
+#' @param proposal_type  Eta proposal kernel: \code{0} = logit-transformed
+#'   random walk (default 1 = same, kept for backward compatibility).
+#'   Since IMP-1, both values use a logit-scale Normal random walk,
+#'   mapping \eqn{\eta \in (0, \eta_{\mathrm{sd}})} to the real line and back
+#'   with the Jacobian correction included in the MH ratio.
+#'   Reference: Vihola (2012) \emph{Statistics and Computing} 22(5), 997--1008.
 #'
 #' @param v0_ggm    GGM SSVS spike variance (default \code{0.015^2}).
 #' @param v1_ggm    GGM SSVS slab variance (default \code{50^2 * 0.015^2}).
@@ -98,23 +111,24 @@
 #'
 #' @return An object of class \code{"bvs"}, a named list with:
 #'   \describe{
-#'     \item{beta}{Matrix of posterior beta samples (niter x p).}
-#'     \item{gamma}{Posterior gamma samples (dense matrix or sparse list,
-#'       depending on backend/storage options).}
-#'     \item{gamma_pip}{Posterior inclusion probabilities for gamma
-#'       (length p).}
-#'     \item{alpha}{Vector of posterior alpha (intercept) samples.}
-#'     \item{sigmasq}{Vector of posterior sigma^2 samples.}
-#'     \item{eta1}{Vector of eta1 (dynamic or single-graph coupling) samples
-#'       (if applicable).}
-#'     \item{eta2}{Vector of eta2 (fixed coupling) samples
-#'       (if applicable).}
-#'     \item{Z_list}{List of GGM adjacency snapshots (if applicable).}
-#'     \item{Z_pip}{Posterior edge inclusion probabilities for GGM adjacency
-#'       (if applicable).}
-#'     \item{tau}{Matrix of posterior tau (z_dat coefficient) samples
-#'       (niter x q), or NULL if z_dat was not supplied.}
-#'     \item{call}{The matched call.}
+#'     \item{beta}{Matrix of posterior beta samples (\code{niter x p}), or sparse
+#'       list when \code{store_beta = FALSE} in sparse backends.}
+#'     \item{gamma}{Posterior gamma samples (\code{niter x p} matrix or sparse
+#'       index list, depending on backend and storage options).}
+#'     \item{gamma_pip}{Posterior inclusion probabilities (length \code{p}), or
+#'       \code{NULL} when not recoverable.}
+#'     \item{alpha}{Numeric vector of posterior intercept samples (length \code{niter}).}
+#'     \item{sigmasq}{Numeric vector of posterior \eqn{\sigma^2} samples.}
+#'     \item{eta1}{Numeric vector of eta1 coupling parameter samples.}
+#'     \item{eta2}{Numeric vector of eta2 coupling samples (dual-network models only).}
+#'     \item{Z_list}{List of GGM adjacency snapshots (\code{store_Z_list = TRUE} only).}
+#'     \item{Z_pip}{Sparse matrix of GGM edge posterior inclusion probabilities
+#'       (\code{store_Z_pip = TRUE} and GGM \code{adj_type} only).}
+#'     \item{tau}{Matrix of posterior tau samples (\code{niter x q}), or
+#'       \code{NULL} if \code{z_dat} was not supplied.}
+#'     \item{call}{The matched function call.}
+#'     \item{outcome_type}{Always \code{"binary"} for \code{bvs_pg}.}
+#'     \item{thin}{Thinning interval used.}
 #'     \item{adj_type}{The adjacency type used.}
 #'     \item{sampler}{Character: \code{"pg"}.}
 #'     \item{niter}{Number of stored post-burn-in iterations.}
@@ -124,10 +138,37 @@
 #'     \item{n}{Number of observations.}
 #'   }
 #'
+#' @references
+#'   Polson NG, Scott JG, Windle J (2013). Bayesian inference for logistic
+#'   models using Polya-Gamma latent variables. \emph{JASA} 108(504),
+#'   1339--1349.
+#'
+#'   Moller J, Pettitt AN, Reeves R, Berthelsen KK (2006). An efficient MCMC
+#'   method for distributions with intractable normalising constants.
+#'   \emph{Biometrika} 93(2), 451--458.
+#'
+#'   Wang H (2012). Bayesian graphical lasso models and efficient posterior
+#'   computation. \emph{Bayesian Analysis} 7(4), 867--886.
+#'
+#'   Zanella G (2020). Informed proposals for local MCMC in discrete spaces.
+#'   \emph{JASA} 115(530), 852--865.
+#'
+#'   Vihola M (2012). Robust adaptive Metropolis algorithm with coerced
+#'   acceptance rate. \emph{Statistics and Computing} 22(5), 997--1008.
+#'
+#'   Vehtari A, Gelman A, Simpson D, Carpenter B, Burkner P-C (2021).
+#'   Rank-normalization, folding, and localization: An improved R-hat for
+#'   assessing convergence of MCMC. \emph{Bayesian Analysis} 16(2), 667--718.
+#'
 #' @details
 #' This function uses Polya-Gamma data augmentation (Polson, Scott, and
 #' Windle 2013) to replace the Metropolis-Hastings updates for beta and
 #' alpha with exact Gibbs sampling steps, improving mixing and convergence.
+#' The Ising coupling parameter eta is updated via the Moller auxiliary
+#' variable method (Exchange Algorithm) with Propp-Wilson perfect simulation.
+#' Proposal SD for eta is adapted online using the Vihola (2012) RAM algorithm.
+#' Selection indicator gamma is updated with locally-balanced proposals
+#' (Zanella 2020) when \code{use_lb_gamma = TRUE}.
 #'
 #' @examples
 #' \dontrun{
@@ -186,6 +227,7 @@ bvs_pg <- function(X, y,
                    alpha0 = 0, beta0 = 0,
                    # Gamma / Ising
                    n_mh_gamma = 3L,
+                   use_lb_gamma = TRUE,
                    eta1_sd = 0.5, eta2_sd = 0.5,
                    mu_tilde = -4,
                    eta1_tilde = 0.5, eta2_tilde = 0.5,
@@ -222,6 +264,16 @@ bvs_pg <- function(X, y,
       call. = FALSE
     )
   }
+  if (!is.logical(use_lb_gamma) || length(use_lb_gamma) != 1L ||
+      is.na(use_lb_gamma)) {
+    stop("'use_lb_gamma' must be TRUE or FALSE.", call. = FALSE)
+  }
+
+  # RMH-3: Validate niter/burnin/thin to prevent UB in C++
+  stopifnot(is.numeric(niter), length(niter) == 1, niter > 0, niter == as.integer(niter))
+  stopifnot(is.numeric(burnin), length(burnin) == 1, burnin >= 0, burnin == as.integer(burnin))
+  stopifnot(is.numeric(thin), length(thin) == 1, thin >= 1, thin == as.integer(thin))
+  if (niter %% thin != 0) warning("niter should be divisible by thin for correct storage.", call. = FALSE)
 
   # Dimensions
   use_sparse_backend <- isTRUE(sparse) && adj_type %in% c("ggm", "ggm_fixed")
@@ -233,18 +285,53 @@ bvs_pg <- function(X, y,
   y <- as.numeric(y)
   n <- nrow(X)
   p <- ncol(X)
+  if (length(y) != n) {
+    stop(sprintf("length(y) = %d does not match nrow(X) = %d", length(y), n),
+         call. = FALSE)
+  }
+
+  # FIX: Validate y is binary {0,1} (PG augmentation requires this)
+  y_unique <- sort(unique(y))
+  if (length(y_unique) > 2 || !all(y_unique %in% c(0, 1))) {
+    # Allow {-1, +1} encoding and convert to {0, 1}
+    if (length(y_unique) == 2 && all(y_unique %in% c(-1, 1))) {
+      message("bvs_pg: Converting y from {-1,+1} to {0,1} encoding.")
+      y[y < 0] <- 0
+    } else {
+      stop("bvs_pg requires binary y in {0,1} or {-1,+1}. ",
+           "Got unique values: ", paste(head(y_unique, 10), collapse = ", "),
+           call. = FALSE)
+    }
+  }
+
+  # FIX: Validate eta2_sd is not set for single-adjacency types
+  # (mirrors the same check in bvs_mh)
+  single_adj_types <- c("fixed", "glasso", "ggm")
+  if (adj_type %in% single_adj_types) {
+    default_eta1 <- formals(bvs_pg)$eta1_sd
+    default_eta2 <- formals(bvs_pg)$eta2_sd
+    if (!identical(eta2_sd, default_eta2) && identical(eta1_sd, default_eta1)) {
+      warning(sprintf(
+        paste0("adj_type='%s' uses a single-network backend that only accepts eta1_sd ",
+               "(current value: %.4f, default). eta2_sd=%.4f was set but will be ",
+               "IGNORED by the C++ sampler. Did you mean to set eta1_sd instead?"),
+        adj_type, eta1_sd, eta2_sd
+      ))
+    }
+  }
 
   # Derived GGM defaults
   if (is.null(v1_ggm)) v1_ggm <- (50^2) * v0_ggm
-  if (is.null(pii_ggm)) pii_ggm <- 4 / (p - 1)
+  if (is.null(pii_ggm)) pii_ggm <- if (p > 1) 4 / (p - 1) else 0.5
 
   # Initialisation
   if (is.null(beta_init) || is.null(gamma_init) || is.null(alpha_init)) {
     if (use_sparse_backend) {
+      # RMH-2: Only overwrite NULL inits; preserve user-provided partial inits.
       init <- .init_ultra_sparse_state(y, p, beta_init, gamma_init, alpha_init)
-      beta_init <- init$beta_init
-      gamma_init <- init$gamma_init
-      alpha_init <- init$alpha_init
+      if (is.null(beta_init)) beta_init <- init$beta_init
+      if (is.null(gamma_init)) gamma_init <- init$gamma_init
+      if (is.null(alpha_init)) alpha_init <- init$alpha_init
     } else {
       init <- .init_mcmc(p, mu, nu0, sigmasq0, alpha0, beta0, h)
       if (is.null(beta_init)) beta_init <- init$beta_init
@@ -287,7 +374,8 @@ bvs_pg <- function(X, y,
         beta_in = beta_init, gamma_in = as.integer(gamma_init),
         alpha_in = alpha_init,
         Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
-        block_size = block_size, pcg_threshold = pcg_threshold
+        block_size = block_size, pcg_threshold = pcg_threshold,
+        use_lb_gamma = isTRUE(use_lb_gamma)
       )
     },
     "dual_fixed" = {
@@ -312,7 +400,8 @@ bvs_pg <- function(X, y,
         beta_in = beta_init, gamma_in = as.integer(gamma_init),
         alpha_in = alpha_init,
         Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
-        block_size = block_size, pcg_threshold = pcg_threshold
+        block_size = block_size, pcg_threshold = pcg_threshold,
+        use_lb_gamma = isTRUE(use_lb_gamma)
       )
     },
     "glasso" = {
@@ -332,7 +421,8 @@ bvs_pg <- function(X, y,
         beta_in = beta_init, gamma_in = as.integer(gamma_init),
         alpha_in = alpha_init,
         Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
-        block_size = block_size, pcg_threshold = pcg_threshold
+        block_size = block_size, pcg_threshold = pcg_threshold,
+        use_lb_gamma = isTRUE(use_lb_gamma)
       )
     },
     "glasso_fixed" = {
@@ -358,7 +448,8 @@ bvs_pg <- function(X, y,
         beta_in = beta_init, gamma_in = as.integer(gamma_init),
         alpha_in = alpha_init,
         Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
-        block_size = block_size, pcg_threshold = pcg_threshold
+        block_size = block_size, pcg_threshold = pcg_threshold,
+        use_lb_gamma = isTRUE(use_lb_gamma)
       )
     },
     "ggm" = {
@@ -386,7 +477,8 @@ bvs_pg <- function(X, y,
           store_gamma = isTRUE(store_gamma),
           store_Z_list = isTRUE(store_Z_list),
           store_Z_pip = isTRUE(store_Z_pip),
-          block_size = block_size, pcg_threshold = pcg_threshold
+          block_size = block_size, pcg_threshold = pcg_threshold,
+          use_lb_gamma = isTRUE(use_lb_gamma)
         )
 
         n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
@@ -412,7 +504,8 @@ bvs_pg <- function(X, y,
           beta_in = beta_init, gamma_in = as.integer(gamma_init),
           alpha_in = alpha_init,
           Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
-          block_size = block_size, pcg_threshold = pcg_threshold
+          block_size = block_size, pcg_threshold = pcg_threshold,
+          use_lb_gamma = isTRUE(use_lb_gamma)
         )
       }
     },
@@ -451,7 +544,8 @@ bvs_pg <- function(X, y,
           store_gamma = isTRUE(store_gamma),
           store_Z_list = isTRUE(store_Z_list),
           store_Z_pip = isTRUE(store_Z_pip),
-          block_size = block_size, pcg_threshold = pcg_threshold
+          block_size = block_size, pcg_threshold = pcg_threshold,
+          use_lb_gamma = isTRUE(use_lb_gamma)
         )
 
         n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
@@ -479,7 +573,8 @@ bvs_pg <- function(X, y,
           beta_in = beta_init, gamma_in = as.integer(gamma_init),
           alpha_in = alpha_init,
           Z_dat = z_dat, tau0 = tau0, htau = htau, tau_in = tau_init,
-          block_size = block_size, pcg_threshold = pcg_threshold
+          block_size = block_size, pcg_threshold = pcg_threshold,
+          use_lb_gamma = isTRUE(use_lb_gamma)
         )
       }
     }
@@ -512,8 +607,10 @@ bvs_pg <- function(X, y,
     call = mc,
     adj_type = adj_type,
     sampler = "pg",
+    outcome_type = "binary",   # RPG-2: Include outcome_type for downstream code
     niter = niter,
     burnin = burnin,
+    thin = thin,               # RPG-2: Include thin for as.mcmc.bvs (SUM-2)
     p = p,
     ntau = ntau,
     n = n

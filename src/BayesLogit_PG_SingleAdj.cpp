@@ -2,6 +2,7 @@
 // [[Rcpp::plugins(cpp17)]]
 #include "BayesLogit_BlockPG.h"
 #include "BayesLogit_Numerics.h"
+#include "BayesLogit_Sparse_Helpers.h"
 #include <RcppArmadillo.h>
 #include <algorithm>
 #include <cmath>
@@ -65,38 +66,7 @@ static inline double logistic(double x) {
   return z / (1.0 + z);
 }
 
-// =============================================================================
-// Normal PDF/CDF support (for truncated normal eta proposals)
-// =============================================================================
-static inline double normal_pdf(double x, double mu, double sigma) {
-  double z = (x - mu) / sigma;
-  return std::exp(-0.5 * z * z) / (sigma * std::sqrt(2.0 * M_PI));
-}
-
-static inline double approx_erf(double x) {
-  double y = 1.0 / (1.0 + 0.3275911 * std::abs(x));
-  double val =
-      1.0 - (((((+1.061405429 * y - 1.453152027) * y + 1.421413741) * y -
-               0.284496736) *
-                  y +
-              0.254829592) *
-             y) *
-                std::exp(-x * x);
-  return (x >= 0.0) ? val : -val;
-}
-
-static inline double normal_cdf(double x, double mu, double sigma) {
-  return 0.5 * (1.0 + approx_erf((x - mu) / (sigma * std::sqrt(2.0))));
-}
-
-// =============================================================================
-// Log Beta density: log Beta(x | a, b) with safe clamping
-// =============================================================================
-static inline double log_beta_pdf(double x, double a, double b) {
-  x = std::max(1e-12, std::min(1.0 - 1e-12, x));
-  return std::lgamma(a + b) - std::lgamma(a) - std::lgamma(b) +
-         (a - 1.0) * std::log(x) + (b - 1.0) * std::log(1.0 - x);
-}
+// normal_pdf, approx_erf, normal_cdf, log_beta_pdf provided by BayesLogit_Sparse_Helpers.h
 
 // =============================================================================
 // Adjacency preprocessing (neighbors + edge list)
@@ -127,7 +97,8 @@ static void build_neighbors_edges(const Rcpp::IntegerMatrix &R1,
 // =============================================================================
 static Rcpp::IntegerVector proppwilson_omega_1eta(const NeighborList &neighbors,
                                                   double mu, double eta,
-                                                  unsigned int T_max) {
+                                                  unsigned int T_max,
+                                                  bool *coalesced = nullptr) {
   const unsigned int p = static_cast<unsigned int>(neighbors.size());
   unsigned int T = 2;
 
@@ -135,7 +106,7 @@ static Rcpp::IntegerVector proppwilson_omega_1eta(const NeighborList &neighbors,
   Rcpp::IntegerVector x_down(p, 1);
   Rcpp::NumericVector pi_up(p), pi_down(p);
 
-  int seed_base = static_cast<int>(std::floor(R::runif(0.0, 1.0) * 1000.0)) + 1;
+  int seed_base = static_cast<int>(std::floor(R::runif(0.0, 1.0) * 2147483646.0)) + 1;
 
   while (Rcpp::sum(x_up != x_down) > 0) {
 
@@ -189,11 +160,13 @@ static Rcpp::IntegerVector proppwilson_omega_1eta(const NeighborList &neighbors,
           x_up[m] = (unif01_fb(gen_fb) < prob) ? 1 : 0;
         }
       }
+      if (coalesced) *coalesced = false; // IMP-2: Signal CFTP failure
+      return x_up;
       for (unsigned int k = 0; k < p; ++k)
         x_down[k] = x_up[k];
     }
   }
-
+  if (coalesced) *coalesced = true;
   return x_up;
 }
 
@@ -205,53 +178,37 @@ static void moller_update_eta_1(const NeighborList &neighbors,
                                 double eta1_sd, double mu_tilde,
                                 double eta1_tilde, const arma::uvec &gamma,
                                 double e_eta, double f_eta, unsigned int T_max,
-                                int proposal_type) {
+                                int proposal_type,
+                                EtaAdapter &adapter1) {
+  // Exactly cancel the Moller effect to implement the Exchange Algorithm
+  mu_tilde = mu;
+  eta1_tilde = eta;
+
   const unsigned int p = static_cast<unsigned int>(neighbors.size());
 
   double eta_new;
   double log_prop_ratio = 0.0;
 
-  if (proposal_type == 0) {
-    double a = std::max(0.0, eta - 0.01);
-    double b = std::min(eta1_sd, eta + 0.01);
-    eta_new = R::runif(a, b);
-
-    double c = std::max(0.0, eta_new - 0.01);
-    double d = std::min(eta1_sd, eta_new + 0.01);
-    log_prop_ratio = std::log(b - a) - std::log(d - c);
-  } else {
-    int attempts = 0;
-    do {
-      eta_new = R::rnorm(eta, eta1_sd);
-      if (++attempts > 10000) {
-        eta_new = eta;
-        break;
-      }
-    } while (eta_new <= 0.0 || eta_new >= eta1_sd);
-
-    double denom_fwd = std::max(1e-16, normal_cdf(eta1_sd, eta, eta1_sd) -
-                                           normal_cdf(0.0, eta, eta1_sd));
-    double denom_rev = std::max(1e-16, normal_cdf(eta1_sd, eta_new, eta1_sd) -
-                                           normal_cdf(0.0, eta_new, eta1_sd));
-
-    double log_q_fwd =
-        std::log(normal_pdf(eta_new, eta, eta1_sd)) - std::log(denom_fwd);
-    double log_q_rev =
-        std::log(normal_pdf(eta, eta_new, eta1_sd)) - std::log(denom_rev);
-
-    log_prop_ratio = log_q_rev - log_q_fwd;
-  }
-
+  // Logit-transformed proposal with Vihola RAM adaptive SD.
+  double eta_safe = std::max(1e-8, std::min(eta1_sd - 1e-8, eta));
+  double phi = std::log(eta_safe / (eta1_sd - eta_safe));
+  double phi_new = R::rnorm(phi, adapter1.sigma());
+  eta_new = eta1_sd / (1.0 + std::exp(-phi_new));
   eta_new = std::max(1e-8, std::min(eta1_sd - 1e-8, eta_new));
+  log_prop_ratio = std::log(eta_new) + std::log(eta1_sd - eta_new) -
+                   std::log(eta_safe) - std::log(eta1_sd - eta_safe);
 
+  bool c1 = true, c2 = true;
   Rcpp::IntegerVector omega_cur =
-      proppwilson_omega_1eta(neighbors, mu, eta, T_max);
+      proppwilson_omega_1eta(neighbors, mu, eta, T_max, &c1);
   Rcpp::IntegerVector omega_new =
-      proppwilson_omega_1eta(neighbors, mu, eta_new, T_max);
+      proppwilson_omega_1eta(neighbors, mu, eta_new, T_max, &c2);
+  if (!c1 || !c2) { adapter1.update(0.0); return; }
 
-  int B_R = 0;
-  int A_om_R = 0, A_om_new_R = 0;
-  int sum_om = 0, sum_om_new = 0;
+  // L-3: use double to prevent int overflow for large dense graphs
+  double B_R = 0.0;
+  double A_om_R = 0.0, A_om_new_R = 0.0;
+  double sum_om = 0.0, sum_om_new = 0.0;
 
   for (unsigned int j = 0; j < p; ++j) {
     sum_om += omega_cur[j];
@@ -260,24 +217,26 @@ static void moller_update_eta_1(const NeighborList &neighbors,
   for (const auto &e : edges) {
     Index j = e.first;
     Index k = e.second;
-    B_R += (int)gamma(j) * (int)gamma(k);
-    A_om_R += omega_cur[j] * omega_cur[k];
-    A_om_new_R += omega_new[j] * omega_new[k];
+    B_R += (double)gamma(j) * (double)gamma(k);
+    A_om_R += (double)omega_cur[j] * (double)omega_cur[k];
+    A_om_new_R += (double)omega_new[j] * (double)omega_new[k];
   }
 
   double log_prior = log_beta_pdf(eta_new / eta1_sd, e_eta, f_eta) -
                      log_beta_pdf(eta / eta1_sd, e_eta, f_eta);
 
-  double log_target = (eta_new - eta) * (double)B_R + log_prior;
-  double log_aux = mu_tilde * (double)(sum_om_new - sum_om) +
-                   eta1_tilde * (double)(A_om_new_R - A_om_R);
-  double log_norm = mu * (double)(sum_om - sum_om_new) + eta * (double)A_om_R -
-                    eta_new * (double)A_om_new_R;
+  double log_target = (eta_new - eta) * B_R + log_prior;
+  double log_aux = mu_tilde * (sum_om_new - sum_om) +
+                   eta1_tilde * (A_om_new_R - A_om_R);
+  double log_norm = mu * (sum_om - sum_om_new) + eta * A_om_R -
+                    eta_new * A_om_new_R;
 
   double log_MH = log_target + log_aux + log_norm + log_prop_ratio;
 
+  double accept_prob = std::min(1.0, std::exp(std::min(0.0, log_MH)));
   if (bvs_dadj::safe_mh_accept(log_MH))
     eta = eta_new;
+  adapter1.update(accept_prob);
 }
 
 } // anonymous namespace
@@ -294,7 +253,7 @@ Rcpp::List BayesLogit_PG_SingleAdj(
     double alpha_in = 0.0, double tau0 = 0.0, double htau = 1.5,
     Rcpp::Nullable<Rcpp::NumericVector> tau_in = R_NilValue,
     double eta1_init = 0.01, double sigmasq_init = 1.0, int block_size = 1,
-    int pcg_threshold = 500) {
+    int pcg_threshold = 500, bool use_lb_gamma = true) {
   Rcpp::RNGScope scope;
 
   const arma::uword n = X.n_rows;
@@ -371,6 +330,8 @@ Rcpp::List BayesLogit_PG_SingleAdj(
 
   arma::vec lin(n);
 
+  EtaAdapter eta1_adapter(0.5);  // Vihola RAM for eta1 proposal
+
   const int total_iter = niter + burnin;
   for (int iter = 0; iter < total_iter; ++iter) {
 
@@ -400,10 +361,11 @@ Rcpp::List BayesLogit_PG_SingleAdj(
 
       if (block_size > 1 && (int)p_active > pcg_threshold) {
         // PCG path for large active sets
-        bvs_dadj_block::PCGConfig pcg_cfg(1e-6, 200, pcg_threshold);
-        arma::vec beta_act;
+        bvs_dadj_block::PCGConfig pcg_cfg(1e-4, 200, pcg_threshold);
+        arma::vec beta_act = beta.elem(active);
         bool pcg_ok = bvs_dadj_block::pcg_sample_beta(
-            beta_act, X_act, omega_pg, kappa, alpha, 1.0 / sigmasq, pcg_cfg);
+            beta_act, X_act, omega_pg, kappa, alpha, 1.0 / sigmasq, pcg_cfg,
+            &Z_tau, beta0);
         if (pcg_ok && beta_act.n_elem == p_active)
           beta.elem(active) = beta_act;
       } else {
@@ -460,6 +422,11 @@ Rcpp::List BayesLogit_PG_SingleAdj(
     }
 
     // ===================== STEP B: gamma update =========================
+    // Locally-balanced gamma proposal state (Zanella 2020)
+    std::vector<double> lb_score, lb_weight;
+    double lb_Z = 0.0;
+    LBProposalDelta lb_delta;
+
     if (block_size > 1) {
       // Block update: Swendsen-Wang + Uncollapsed Gibbs
       auto gamma_u8 = bvs_dadj_block::gamma_to_uint8(gamma);
@@ -488,10 +455,22 @@ Rcpp::List BayesLogit_PG_SingleAdj(
       if (!std::isfinite(sd_beta) || sd_beta <= 0.0)
         sd_beta = 1.0;
 
+      // Initialize LB scores before gamma scan
+      arma::ivec gamma_iv;
+      if (use_lb_gamma) {
+        gamma_iv = arma::conv_to<arma::ivec>::from(gamma);
+        init_lb_single_scores_dense(R_adj_int, (int)p, gamma_iv, mu, eta, lb_score, lb_weight, lb_Z);
+      }
+
       for (int mh = 0; mh < n_mh_gamma; ++mh) {
-        int j = (int)std::floor(R::runif(0.0, (double)p));
-        if (j >= (int)p)
-          j = (int)p - 1;
+        int j;
+        if (use_lb_gamma) {
+          j = sample_weighted_index(lb_weight, lb_Z, (int)p);
+        } else {
+          j = (int)std::floor(R::runif(0.0, (double)p));
+          if (j >= (int)p)
+            j = (int)p - 1;
+        }
         arma::uword ju = (arma::uword)j;
 
         if (gamma(ju) == 0)
@@ -523,11 +502,25 @@ Rcpp::List BayesLogit_PG_SingleAdj(
         if (!std::isfinite(log_ratio))
           continue;
 
+        // LB correction: adjust MH ratio for non-uniform proposal
+        if (use_lb_gamma) {
+          int delta_g = 1 - 2 * (int)gamma(ju);  // +1 if currently 0, -1 if currently 1
+          gamma_iv(ju) = (int)gamma(ju);  // ensure sync
+          build_lb_single_delta_dense(R_adj_int, (int)p, gamma_iv, eta, j, delta_g,
+              lb_score, lb_weight, lb_Z, lb_delta);
+          log_ratio += lb_delta.log_q_rev - lb_delta.log_q_fwd;
+        }
+
         if (bvs_dadj::safe_mh_accept(log_ratio)) {
           gamma(ju) = (arma::uword)g_prop;
           beta(ju) = b_prop;
           z = z_prop;
           loglik = ll_prop;
+          // Update LB state on acceptance
+          if (use_lb_gamma) {
+            apply_lb_delta(lb_score, lb_weight, lb_Z, lb_delta);
+            gamma_iv(ju) = (int)g_prop;
+          }
         }
 
         if (gamma(ju) == 0)
@@ -596,7 +589,8 @@ Rcpp::List BayesLogit_PG_SingleAdj(
 
     // ===================== STEP D: eta update (Moller + PW) ===============
     moller_update_eta_1(neighbors, edges, mu, eta, eta1_sd, mu_tilde,
-                        eta1_tilde, gamma, e_eta, f_eta, T_max, proposal_type);
+                        eta1_tilde, gamma, e_eta, f_eta, T_max, proposal_type,
+                        eta1_adapter);
 
     // ===================== STORE =======================================
     // Store

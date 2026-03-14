@@ -27,6 +27,7 @@ bvs_pg(
   alpha0 = 0,
   beta0 = 0,
   n_mh_gamma = 3L,
+  use_lb_gamma = TRUE,
   eta1_sd = 0.5,
   eta2_sd = 0.5,
   mu_tilde = -4,
@@ -122,6 +123,10 @@ selection: \code{"ebic"} (default) or \code{"ric"}.}
 
 \item{n_mh_gamma}{Number of gamma MH updates per MCMC iteration
 (default 3; used by GGM/sparse backends).}
+
+\item{use_lb_gamma}{Logical; for sparse GGM backends, use locally-balanced
+Zanella-style coordinate proposals for gamma updates (default \code{TRUE}).
+Ignored by dense backends.}
 
 \item{eta1_sd}{Upper bound for eta1 (single-eta models or dual models, default 0.5).}
 

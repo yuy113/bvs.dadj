@@ -11,11 +11,15 @@ Authors@R: c(
     person("Raji", "Balasubramanian", email = "rbalasub@schoolph.umass.edu",
            role = "aut"))
 Description: MCMC methods for Bayesian variable selection with Ising/MRF priors
-    informed by graphical model adjacency. The Metropolis-Hastings sampler
-    supports binary logistic outcomes, continuous Gaussian outcomes,
-    right-censored time-to-event outcomes via Cox partial likelihood, and
-    overdispersed count outcomes via a negative-binomial (Poisson-Gamma)
-    representation; the Polya-Gamma sampler targets binary logistic outcomes.
+    informed by graphical model adjacency. The bvs_mh sampler uses
+    Metropolis-Hastings (MH) by default and also provides Hamiltonian Monte
+    Carlo (HMC) and the No-U-Turn Sampler (NUTS) (Hoffman & Gelman 2014;
+    Betancourt 2017) for active parameter-block updates in binary and
+    time-to-event models; it supports binary logistic outcomes, continuous
+    Gaussian outcomes, right-censored time-to-event outcomes via Cox partial
+    likelihood, and overdispersed count outcomes via a negative-binomial
+    (Poisson-Gamma) representation. The Polya-Gamma sampler targets binary
+    logistic outcomes.
     Supports fixed, graphical lasso, and Bayesian GGM adjacency structures
     with dense and sparse high-dimensional variants under single and dual
     network priors. Allows additional covariates (z_dat) with coefficients
@@ -23,7 +27,7 @@ Description: MCMC methods for Bayesian variable selection with Ising/MRF priors
     selection.
 Depends: R (>= 3.5.0)
 Imports: Rcpp (>= 1.0.0), Matrix, methods, stats, graphics, coda
-Suggests: huge, MASS, testthat (>= 3.0.0), knitr, rmarkdown, KEGGREST
+Suggests: huge, MASS, testthat (>= 3.0.0), knitr, rmarkdown, KEGGREST, posterior
 LinkingTo: Rcpp, RcppArmadillo
 License: GPL (>= 2)
 Encoding: UTF-8

@@ -68,9 +68,13 @@ inline bool robust_chol_inplace(arma::mat &chol_upper, arma::mat &A,
   if (!std::isfinite(dscale) || dscale <= 0.0)
     dscale = 1.0;
 
+  // NUM-1: Save original diagonal before jittering to avoid cumulative drift.
+  // Each retry uses absolute jitter (not cumulative), so the Cholesky
+  // factorizes a matrix with exactly the intended perturbation.
+  arma::vec diag_backup = A.diag();
   double jitter = std::max(jitter_init, 1e-12 * dscale);
   for (int k = 0; k < max_attempts; ++k) {
-    A.diag() += jitter;
+    A.diag() = diag_backup + jitter; // absolute, not cumulative
     if (arma::chol(chol_upper, arma::symmatu(A)))
       return true;
     jitter *= jitter_mult;
@@ -263,7 +267,8 @@ inline double cox_loglik_breslow(const arma::vec &linpred,
 
     for (arma::uword pos = gs; pos <= ge; ++pos) {
       const arma::uword i = cox.order(pos);
-      const double eta = clamp_finite(linpred(i), -1e6, 1e6, 0.0);
+      // NUM-2: tighten clamp to avoid needless overflow risk in extreme tails.
+      const double eta = clamp_finite(linpred(i), -500.0, 500.0, 0.0);
 
       if (!std::isfinite(running_max)) {
         running_max = eta;
@@ -342,7 +347,8 @@ public:
   void recompute() {
     max_eta_ = -std::numeric_limits<double>::infinity();
     for (arma::uword i = 0; i < n_; ++i) {
-      double eta = clamp_finite(linpred_(i), -1e6, 1e6, 0.0);
+      // NUM-2: keep Cox tracker linpred in a numerically safe finite range.
+      double eta = clamp_finite(linpred_(i), -500.0, 500.0, 0.0);
       linpred_(i) = eta;
       if (eta > max_eta_)
         max_eta_ = eta;

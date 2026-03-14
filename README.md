@@ -2,13 +2,13 @@
 
 **Bayesian Variable Selection with Dual-Adjacency Network-Informed Ising Priors**
 
-MCMC methods for Bayesian variable selection with Ising/MRF priors informed by graphical model adjacency matrices. `bvs_mh()` supports binary logistic outcomes (default), continuous Gaussian outcomes, right-censored time-to-event outcomes via Cox partial likelihood, and overdispersed count outcomes via a negative-binomial (Poisson-Gamma) representation; `bvs_pg()` targets binary logistic outcomes. Both samplers support six adjacency-structure types with dense and sparse high-dimensional backends.
+MCMC methods for Bayesian variable selection with Ising/MRF priors informed by graphical model adjacency matrices. `bvs_mh()` uses Metropolis-Hastings (MH) by default and also provides Hamiltonian Monte Carlo (HMC) and the No-U-Turn Sampler (NUTS) for binary outcome and right censored time to event outcome; it supports binary outcomes (default), continuous Gaussian outcomes, right-censored time-to-event outcomes via Cox's model, and count data outcomes via a negative-binomial (Poisson-Gamma) representation. `bvs_pg()` targets binary logistic outcomes. Both samplers support six adjacency-structure types with dense and sparse high-dimensional backends.
 
 ## Features
 
 | Feature | Description |
 |---|---|
-| **Two MCMC samplers** | Metropolis-Hastings (`bvs_mh`) and Polya-Gamma Gibbs (`bvs_pg`) |
+| **Two MCMC samplers** | `bvs_mh` uses Metropolis-Hastings (MH) by default, with optional Hamiltonian Monte Carlo (HMC) and No-U-Turn Sampler (NUTS) updates for binary/TTE models; `bvs_pg` uses Polya-Gamma Gibbs |
 | **Outcome support** | `bvs_mh`: `outcome_type = "binary"`, `"continuous"`, `"TTE"`, or `"count"`; `bvs_pg`: binary logistic |
 | **Six adjacency types** | `"fixed"`, `"dual_fixed"`, `"glasso"`, `"glasso_fixed"`, `"ggm"`, `"ggm_fixed"` |
 | **Dense & sparse backends** | 12 optimised C++ backends for moderate and high-dimensional settings |
@@ -17,6 +17,9 @@ MCMC methods for Bayesian variable selection with Ising/MRF priors informed by g
 | **Ising/MRF coupling estimation** | Möller (2006) auxiliary variable MH with Propp-Wilson perfect simulation |
 | **Phase transition detection** | Sweep eta to locate the critical coupling strength and calibrate priors |
 | **Eta hyperparameter tuning** | Grid-search functions to select optimal Möller hyperparameters |
+| **Locally-balanced γ proposals** | Zanella (2020) `g(t)=√t` balancing function for discrete gamma coordinate proposals; supported by all 12 backends via `use_lb_gamma = TRUE` (default) |
+| **Adaptive η proposals (RAM)** | Vihola (2012) Robust Adaptive Metropolis with 1D Robbins-Monro log-σ update targeting 44% acceptance; active across all 12 backends |
+| **Modern convergence diagnostics** | `bvs_rhat()`, `bvs_ess_bulk()`, `bvs_ess_tail()` implement rank-normalised split-R̂ and bulk/tail ESS (Vehtari et al. 2021); integrated into `summary()` |
 | **Rich diagnostics** | PIP, trace, ACF plots; Gelman-Rubin PSRF via `coda` |
 
 ## Installation
@@ -29,7 +32,7 @@ devtools::install_github("yuy113/BVS.DAdj")
 ### Dependencies
 
 - **Required:** `Rcpp`, `RcppArmadillo`, `Matrix`, `methods`, `stats`, `graphics`, `coda`
-- **Suggested:** `huge` (graphical lasso adjacency), `MASS`, `testthat`, `knitr`, `rmarkdown`
+- **Suggested:** `huge` (graphical lasso adjacency), `MASS`, `testthat`, `knitr`, `rmarkdown`, `posterior` (faster rank-normalised R̂ and ESS via Vehtari et al. 2021)
 
 ## Quick Start
 
@@ -154,6 +157,19 @@ fit2 <- bvs_pg(X, y, adj_type = "fixed", adj_fixed = R,
 bvs_gelman_diag(list(fit1, fit2))
 ```
 
+### Example 7 — Modern convergence diagnostics (Vehtari et al. 2021)
+
+```r
+fit <- bvs_pg(X, y, adj_type = "fixed", adj_fixed = R,
+              niter = 10000, burnin = 2000)
+s <- summary(fit)  # ESS and ESS_tail columns in s$summary_beta use rank-normalised diagnostics
+
+# Per-variable R-hat and ESS for the first chain:
+rhat_eta <- bvs_rhat(fit$eta1)          # should be < 1.01
+ess_bulk  <- bvs_ess_bulk(fit$eta1)     # bulk ESS
+ess_tail  <- bvs_ess_tail(fit$eta1)     # tail ESS (min of 5th and 95th pct)
+```
+
 ## Key Parameters
 
 ### MCMC control
@@ -162,11 +178,16 @@ bvs_gelman_diag(list(fit1, fit2))
 |---|---|---|
 | `outcome_type` | `"binary"` | Outcome model for `bvs_mh`: `"binary"` (logistic), `"continuous"` (Gaussian), `"TTE"` (Cox partial likelihood), or `"count"` (negative-binomial via Poisson-Gamma augmentation) |
 | `event` | `NULL` | Event indicator for `outcome_type = "TTE"` (`1`=event, `0`=censored; `{-1,1}` also accepted); ignored for other outcomes |
+| `alg_type` | `"MH"` | Active-parameter-block update algorithm for `bvs_mh`: `"MH"` = Metropolis-Hastings (default), `"HMC"` = Hamiltonian Monte Carlo, or `"NUTS"` = No-U-Turn Sampler; HMC/NUTS are supported for binary and TTE outcomes |
+| `hmc_step_size` | `0.1` | Initial HMC/NUTS step size; NUTS adapts this during burn-in |
+| `hmc_n_leapfrog` | `10` | Leapfrog step count for HMC |
+| `nuts_max_treedepth` | `10` | Maximum NUTS tree depth |
 | `niter` | `60000` | Post-burn-in MCMC iterations |
 | `burnin` | `10000` | Burn-in iterations (discarded) |
 | `thin` | `1` | Storage thinning interval |
 | `n_thin_gb` | `3` | Inner MH sub-iterations for gamma and beta per MCMC step *(MH dense backends only)* |
 | `n_mh_gamma` | `3` | Gamma flip proposals per iteration *(GGM/sparse backends)* |
+| `use_lb_gamma` | `TRUE` | Use Zanella (2020) locally-balanced `g(t)=√t` coordinate proposals for γ updates; supported by **all 12 backends** |
 
 ### Ising prior
 
@@ -238,7 +259,7 @@ bvs_gelman_diag(list(fit1, fit2))
 
 Shared headers:
 - `BayesLogit_Numerics.h` — numerical utilities including `safe_mh_accept()`
-- `BayesLogit_Sparse_Helpers.h` — CSC sparse-matrix operations, Möller/Propp-Wilson helpers
+- `BayesLogit_Sparse_Helpers.h` — CSC sparse-matrix operations, Möller/Propp-Wilson helpers, `EtaAdapter` struct (Vihola 2012 RAM), and locally-balanced gamma helpers (`init_lb_*_scores_dense/sparse`, `build_lb_*_delta_dense/sparse`, `apply_lb_delta`)
 
 ## Return Value
 
@@ -258,7 +279,7 @@ Both `bvs_mh()` and `bvs_pg()` return an S3 object of class `"bvs"`:
 | `Z_pip` | sparse matrix | GGM edge PIPs *(if `store_Z_pip = TRUE`)* |
 | `call` | call | Matched function call |
 | `outcome_type` | character | Present for `bvs_mh` (`"binary"`, `"continuous"`, `"TTE"`, or `"count"`) |
-| `adj_type`, `sampler` | character | Model identifiers |
+| `adj_type`, `sampler` | character | Model identifiers; `sampler` is one of `"mh"`, `"hmc"`, `"nuts"`, or `"pg"` |
 | `niter`, `burnin`, `p`, `n`, `ntau` | integer | Stored run dimensions and counts |
 
 Use `summary()`, `print()`, and `plot()` S3 methods for post-processing.
@@ -271,9 +292,17 @@ Use `summary()`, `print()`, and `plot()` S3 methods for post-processing.
 
 ## References
 
-- Wang, H. (2015). Scaling It Up: Stochastic Search Structure Learning in Graphical Models *Bayesian Analysis*, 10(2), 351–377.
+- Wang, H. (2012). Bayesian Graphical Lasso Models and Efficient Posterior Computation. *Bayesian Analysis*, 7(4), 867–886.
+- Wang, H. (2015). Scaling It Up: Stochastic Search Structure Learning in Graphical Models. *Bayesian Analysis*, 10(2), 351–377.
 - Möller, J., Pettitt, A. N., Reeves, R., & Berthelsen, K. K. (2006). An efficient Markov chain Monte Carlo method for distributions with intractable normalising constants. *Biometrika*, 93(2), 451–458.
 - Polson, N. G., Scott, J. G., & Windle, J. (2013). Bayesian inference for logistic models using Pólya–Gamma latent variables. *Journal of the American Statistical Association*, 108(504), 1339–1349.
+- Hoffman, M. D., & Gelman, A. (2014). The No-U-Turn sampler: adaptively setting path lengths in Hamiltonian Monte Carlo. *J. Mach. Learn. Res.*, 15(1), 1593–1623.
+- Betancourt, M. (2017). A conceptual introduction to Hamiltonian Monte Carlo. *arXiv preprint arXiv:1701.02434*.
+- **Zanella, G. (2020).** Informed proposals for local MCMC in discrete spaces. *Journal of the American Statistical Association*, 115(530), 852–865. *(Locally-balanced γ proposals, IMP-6)*
+- **Vihola, M. (2012).** Robust adaptive Metropolis algorithm with coerced acceptance rate. *Statistics and Computing*, 22(5), 997–1008. *(RAM adaptive η proposals, IMP-7)*
+- Andrieu, C., & Thoms, J. (2008). A tutorial on adaptive MCMC. *Statistics and Computing*, 18(4), 343–373.
+- **Vehtari, A., Gelman, A., Simpson, D., Carpenter, B., & Bürkner, P.-C. (2021).** Rank-normalization, folding, and localization: An improved R̂ for assessing convergence of MCMC. *Bayesian Analysis*, 16(2), 667–718. *(Rank-normalised R̂ and ESS, IMP-8)*
+- Nishimura, A., & Suchard, M. A. (2022). Prior-preconditioned conjugate gradient method for accelerated Gibbs sampling. *Journal of the American Statistical Association*.
 
 ## License
 

@@ -1,15 +1,9 @@
 ---
 title: "BVS.DAdj: Bayesian Variable Selection with Dual-Adjacency Network-Informed Ising Priors in R"
 author:
-  - name: Yubing Yao
-    affiliation: Department of Biostatistics and Epidemiology, University of Massachusetts Amherst
-    email: yyao@umass.edu
-  - name: Mahlet G. Tadesse
-    affiliation: Department of Mathematics & Statistics, Georgetown University
-    email: mgt26@georgetown.edu
-  - name: Raji Balasubramanian
-    affiliation: Department of Biostatistics and Epidemiology, University of Massachusetts Amherst School of Public Health
-    email: rbalasub@schoolph.umass.edu
+  - "Yubing Yao"
+  - "Mahlet G. Tadesse"
+  - "Raji Balasubramanian"
 abstract: >
   We introduce **BVS.DAdj**, an R package for Bayesian variable selection in
   generalized regression models using Markov random field (MRF) priors that
@@ -28,9 +22,8 @@ abstract: >
   ($p \leq n$) and sparse high-dimensional ($p \gg n$) C++ backends are
   implemented via **Rcpp** and **RcppArmadillo**. We describe the statistical
   model, prior specifications, MCMC algorithms, and package API, and
-  demonstrate usage through two simulation studies (moderate: $n=500$, $p=100$;
-  high-dimensional: $n=100$, $p=500$) and a real urine metabolomics case-control
-  application with sparse external pathway adjacency.
+  demonstrate usage through a moderate-dimensional simulation example
+  ($n=500$, $p=100$) focused on the `glasso_fixed` method.
 date: "`r Sys.Date()`"
 bibliography: references.bib
 output:
@@ -41,15 +34,23 @@ output:
     self_contained: true
     fig_caption: true
     theme: flatly
-    highlight: tango
+    highlight: null
     df_print: kable
     mathjax: "file:///opt/homebrew/anaconda3/lib/python3.12/site-packages/spyder/plugins/help/utils/js/mathjax/MathJax.js?config=TeX-AMS-MML_HTMLorMML"
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+    fig_crop: false
+    highlight: null
 vignette: >
   %\VignetteIndexEntry{BVS.DAdj: R Journal Article}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
+```{=html}
 $$
 \require{AMSmath}
 \require{AMSsymbols}
@@ -60,10 +61,20 @@ $$
 \newcommand{\bfOmega}{\boldsymbol{\Omega}}
 \newcommand{\calR}{\mathcal{R}}
 $$
+```
+
+```{=latex}
+\newcommand{\N}{\mathcal{N}}
+\newcommand{\bfbeta}{\boldsymbol{\beta}}
+\newcommand{\bfgamma}{\boldsymbol{\gamma}}
+\newcommand{\bftau}{\boldsymbol{\tau}}
+\newcommand{\bfOmega}{\boldsymbol{\Omega}}
+\newcommand{\calR}{\mathcal{R}}
+```
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
-  eval    = FALSE,
+  eval    = TRUE,
   echo    = TRUE,
   message = FALSE,
   warning = FALSE,
@@ -128,10 +139,7 @@ Section\ 3 presents the MCMC sampling algorithms.
 Section\ 4 describes the package design and API.
 Section\ 5 presents Simulation Study 1 (moderate dimensions, $n=500$,
 $p=100$).
-Section\ 6 presents Simulation Study 2 (high-dimensional sparse, $n=100$,
-$p=500$).
-Section\ 7 analyzes a real urine metabolomics dataset.
-Section\ 8 concludes with discussion.
+Section\ 6 concludes with discussion.
 
 # Statistical Model and Prior Specifications {#sec-model}
 
@@ -453,7 +461,7 @@ $(\tilde{\mu}, \tilde{\eta}_1, \tilde{\eta}_2)$. The resulting MH ratio
 for a proposal $\eta_\ell' \sim q(\eta_\ell' \mid \eta_\ell)$ is:
 
 $$
-\alpha_{\mathrm{Möller}} = \min\!\left\{1,\;
+\alpha_{\mathrm{Moller}} = \min\!\left\{1,\;
 \frac{p(\boldsymbol{\gamma} \mid \mu, \eta_1', \eta_2')\,
       p(\eta_\ell')\,
       f(\boldsymbol{\omega}^* \mid \tilde{\mu}, \tilde{\eta}_1', \tilde{\eta}_2')}
@@ -595,11 +603,11 @@ dispatch to 12 C++ backends based on `sampler × adj_type × sparse`:
 | `"fixed"` | One user-supplied binary matrix `adj_fixed` | $\eta_1$ | MH + PG, dense |
 | `"dual_fixed"` | Two user-supplied matrices (`adj_fixed`, `adj_fixed2`) | $\eta_1, \eta_2$ | MH + PG, dense |
 | `"glasso"` | Graphical lasso from $\mathbf{X}$ (EBIC or RIC) | $\eta_1$ | MH + PG, dense |
-| `"glasso_fixed"` | Graphical lasso + one fixed matrix | $\eta_1, \eta_2$ | MH + PG, dense |
+| `glasso_fixed` | Graphical lasso + one fixed matrix | $\eta_1, \eta_2$ | MH + PG, dense |
 | `"ggm"` | Bayesian GGM SSVS, updated at every iteration | $\eta_1$ | MH + PG, dense/sparse |
 | `"ggm_fixed"` | Bayesian GGM + one fixed matrix | $\eta_1, \eta_2$ | MH + PG, dense/sparse |
 
-For `"glasso"` and `"glasso_fixed"`, the adjacency is estimated once
+For `glasso` and `glasso_fixed`, the adjacency is estimated once
 before MCMC using the **huge** package [@FHT2008] and held fixed
 throughout. For `"ggm"` and `"ggm_fixed"`, the adjacency is updated at
 every MCMC iteration via the GGM column sweep.
@@ -748,28 +756,46 @@ cat("Best eta1_sd:", best$best_row$eta1_sd, "\n")
 
 # Simulation Study 1: Moderate Dimensions ($n = 500$, $p = 100$) {#sec-sim1}
 
-## Study design {#sec-sim1-design}
+## Study Design {#sec-sim1-design}
 
-We generate a binary logistic regression dataset with $n = 500$ observations,
-$p = 100$ covariates, and $p^* = 10$ truly active variables. The correlation
-structure emulates a metabolite clustering scenario: the first $p^*$ covariates
-form a block with pairwise correlation $\rho = 0.5$, while the remaining
-$p - p^*$ predictors are independent standard normals.
+We evaluate BVS-DAdj under a moderate-dimensional binary logistic regression
+setting with $n = 500$ observations, $p = 100$ covariates, and $p^* = 30$
+truly active predictors. The active set is partitioned into two signal groups:
+10 weak-signal predictors ($j = 1, \ldots, 10$) with coefficients drawn from
+$\mathrm{Uniform}(0.4, 0.6)$ and 20 strong-signal predictors
+($j = 11, \ldots, 30$) with coefficients from
+$\mathrm{Uniform}(1.05, 1.15)$, all with alternating signs.
+The remaining $p - p^* = 70$ predictors are null ($\beta_j = 0$).
+
+The covariate matrix $\mathbf{X}$ is generated from a multivariate normal
+distribution with block-equicorrelation structure: predictors $1$ through $30$
+share pairwise correlation $\rho = 0.35$, while predictors $31$ through $100$
+are independent. The binary response is generated as
+$y_i \sim \mathrm{Bernoulli}(\mathrm{logistic}(\mathbf{x}_i^\top \boldsymbol{\beta}))$.
 
 ```{r sim1-data}
 set.seed(2024)
-n      <- 500L;  p      <- 100L;  p_star <- 10L
+n      <- 500L
+p      <- 100L
+p_star <- 30L
 
 # Block covariance for active predictors
 Sigma <- diag(p)
-Sigma[1:p_star, 1:p_star] <- 0.5
+Sigma[1:p_star, 1:p_star] <- 0.35
 diag(Sigma) <- 1.0
 
-X      <- MASS::mvrnorm(n, mu = rep(0, p), Sigma = Sigma)
+X <- MASS::mvrnorm(n, mu = rep(0, p), Sigma = Sigma)
+
 beta_true <- rep(0, p)
-beta_true[1:p_star] <- c(1.5, -1.2, 1.0, -0.8,  0.6,
-                         -0.5,  0.4, -0.3, 0.25, -0.2)
-y <- rbinom(n, 1L, plogis(X %*% beta_true))
+weak_mag   <- runif(10L, min = 0.4, max = 0.6)
+strong_mag <- runif(20L, min = 1.05, max = 1.15)
+sgn        <- rep(c(1, -1), length.out = p_star)
+
+beta_true[1:10]   <- sgn[1:10]   * weak_mag
+beta_true[11:30]  <- sgn[11:30]  * strong_mag
+
+linpred <- X %*% beta_true
+y <- rbinom(n, size = 1L, prob = plogis(linpred))
 
 cat(sprintf("Cases: %d  Controls: %d  (%.1f%% cases)\n",
             sum(y), sum(1 - y), 100 * mean(y)))
@@ -777,19 +803,10 @@ cat(sprintf("Cases: %d  Controls: %d  (%.1f%% cases)\n",
 
 ## Adjacency construction {#sec-sim1-adj}
 
-We compare five adjacency strategies against the same dataset:
-
-1. **Fixed (50% true edges)**: an external binary adjacency matrix derived
-   by randomly retaining 50% of edges from the true active-block graph.
-   This mimics partial, noisy prior knowledge (e.g., a biological pathway
-   database covering only a subset of true relationships).
-2. **GGM**: a Bayesian GGM SSVS adjacency learned jointly during MCMC.
-3. **Glasso**: a graphical-lasso adjacency estimated once before MCMC
-   using the EBIC criterion.
-4. **Glasso + Fixed**: dual-adjacency combining the glasso-learned graph
-   with the fixed external matrix (coupling parameters $\eta_1, \eta_2$).
-5. **GGM + Fixed**: dual-adjacency combining GGM with the fixed external
-   matrix.
+For this vignette version, we keep only the `glasso_fixed` method.
+The fixed external adjacency is formed by randomly retaining 50% of true
+active-block edges and is then combined with a glasso-estimated adjacency
+inside `adj_type = "glasso_fixed"`.
 
 ```{r sim1-adj}
 # True active-block adjacency
@@ -799,9 +816,11 @@ diag(R_true1) <- 0L
 
 # External fixed adjacency: random 50% of true edges
 set.seed(202401)
-true_pairs  <- which(upper.tri(R_true1) & R_true1 == 1L, arr.ind = TRUE)
-keep_pairs  <- true_pairs[sample(nrow(true_pairs), ceiling(0.5 * nrow(true_pairs))), ]
-R_ext50     <- matrix(0L, p, p)
+true_pairs <- which(upper.tri(R_true1) & R_true1 == 1L, arr.ind = TRUE)
+keep_n     <- ceiling(0.5 * nrow(true_pairs))
+keep_pairs <- true_pairs[sample(nrow(true_pairs), keep_n), , drop = FALSE]
+
+R_ext50 <- matrix(0L, p, p)
 R_ext50[cbind(keep_pairs[, 1], keep_pairs[, 2])] <- 1L
 R_ext50[cbind(keep_pairs[, 2], keep_pairs[, 1])] <- 1L
 diag(R_ext50) <- 0L
@@ -810,1042 +829,215 @@ cat("True edges:", sum(R_true1) / 2,
     "  External-50% edges:", sum(R_ext50) / 2, "\n")
 ```
 
-## Five-method MCMC comparison (MH and PG) {#sec-sim1-run}
+## MCMC analysis (glasso\_fixed only) {#sec-sim1-run}
+
+For illustrative runtime only, we set `niter = 10000` and `runin = 5000`.
+All other hyperparameters are kept the same as before.
 
 ```{r sim1-run}
-# Hyperparameters tuned for ~10% expected sparsity
-MU   <- qlogis(0.01)       # strong sparsity prior
-ETA1 <- 0.08; ETA2 <- 0.06 # coupling upper bounds
-E_ETA <- 1.0; F_ETA <- 25.0
-MU_T  <- -7.0; E1T <- 0.005; E2T <- 0.004
+# Hyperparameters (kept unchanged except niter/runin)
+MU    <- qlogis(0.01)
+ETA1  <- 0.08
+ETA2  <- 0.06
+E_ETA <- 1.0
+F_ETA <- 25.0
+MU_T  <- -7.0
+E1T   <- 0.005
+E2T   <- 0.004
 
-niter_s1 <- 60000L; burnin_s1 <- 20000L; thin_s1 <- 1L
+niter_s1 <- 10000L
+runin_s1 <- 5000L
+thin_s1  <- 1L
 
-# --- MH runs ---
-fit_mh_fixed <- bvs_mh(X, y,
-  adj_type  = "fixed", adj_fixed = R_ext50,
-  niter = niter_s1, burnin = burnin_s1, thin = thin_s1,
-  mu = MU, eta1_sd = ETA1, n_thin_gb = 3L)
-
-fit_mh_ggm <- bvs_mh(X, y,
-  adj_type = "ggm", sparse = FALSE,
-  niter = niter_s1, burnin = burnin_s1, thin = thin_s1,
-  mu = MU, eta1_sd = ETA1, n_thin_gb = 3L)
-
-fit_mh_glasso <- bvs_mh(X, y,
-  adj_type = "glasso", glasso_criterion = "ebic",
-  niter = niter_s1, burnin = burnin_s1, thin = thin_s1,
-  mu = MU, eta1_sd = ETA1, n_thin_gb = 3L)
-
-fit_mh_glasso_fixed <- bvs_mh(X, y,
-  adj_type  = "glasso_fixed", adj_fixed = R_ext50,
+set.seed(2024)
+fit_glasso_fixed_1 <- bvs_mh(
+  X, y,
+  adj_type = "glasso_fixed",
+  adj_fixed = R_ext50,
   glasso_criterion = "ebic",
-  niter = niter_s1, burnin = burnin_s1, thin = thin_s1,
-  mu = MU, eta1_sd = ETA1, eta2_sd = ETA2,
-  mu_tilde = MU_T, eta1_tilde = E1T, eta2_tilde = E2T,
-  e_eta = E_ETA, f_eta = F_ETA, n_thin_gb = 3L)
+  niter = niter_s1,
+  burnin = runin_s1,
+  thin = thin_s1,
+  mu = MU,
+  eta1_sd = ETA1,
+  eta2_sd = ETA2,
+  mu_tilde = MU_T,
+  eta1_tilde = E1T,
+  eta2_tilde = E2T,
+  e_eta = E_ETA,
+  f_eta = F_ETA,
+  n_thin_gb = 3L
+)
 
-fit_mh_ggm_fixed <- bvs_mh(X, y,
-  adj_type = "ggm_fixed", adj_fixed = R_ext50, sparse = FALSE,
-  niter = niter_s1, burnin = burnin_s1, thin = thin_s1,
-  mu = MU, eta1_sd = ETA1, eta2_sd = ETA2,
-  mu_tilde = MU_T, eta1_tilde = E1T, eta2_tilde = E2T,
-  e_eta = E_ETA, f_eta = F_ETA, n_thin_gb = 3L)
-
-# --- PG runs ---
-fit_pg_fixed <- bvs_pg(X, y,
-  adj_type = "fixed", adj_fixed = R_ext50,
-  niter = niter_s1, burnin = burnin_s1, thin = thin_s1,
-  mu = MU, eta1_sd = ETA1)
-
-fit_pg_ggm <- bvs_pg(X, y,
-  adj_type = "ggm", sparse = FALSE,
-  niter = niter_s1, burnin = burnin_s1, thin = thin_s1,
-  mu = MU, eta1_sd = ETA1)
-
-fit_pg_glasso <- bvs_pg(X, y,
-  adj_type = "glasso", glasso_criterion = "ebic",
-  niter = niter_s1, burnin = burnin_s1, thin = thin_s1,
-  mu = MU, eta1_sd = ETA1)
-
-fit_pg_glasso_fixed <- bvs_pg(X, y,
-  adj_type = "glasso_fixed", adj_fixed = R_ext50,
+set.seed(9999)
+fit_glasso_fixed_2 <- bvs_mh(
+  X, y,
+  adj_type = "glasso_fixed",
+  adj_fixed = R_ext50,
   glasso_criterion = "ebic",
-  niter = niter_s1, burnin = burnin_s1, thin = thin_s1,
-  mu = MU, eta1_sd = ETA1, eta2_sd = ETA2,
-  mu_tilde = MU_T, eta1_tilde = E1T, eta2_tilde = E2T,
-  e_eta = E_ETA, f_eta = F_ETA)
-
-fit_pg_ggm_fixed <- bvs_pg(X, y,
-  adj_type = "ggm_fixed", adj_fixed = R_ext50, sparse = FALSE,
-  niter = niter_s1, burnin = burnin_s1, thin = thin_s1,
-  mu = MU, eta1_sd = ETA1, eta2_sd = ETA2,
-  mu_tilde = MU_T, eta1_tilde = E1T, eta2_tilde = E2T,
-  e_eta = E_ETA, f_eta = F_ETA)
+  niter = niter_s1,
+  burnin = runin_s1,
+  thin = thin_s1,
+  mu = MU,
+  eta1_sd = ETA1,
+  eta2_sd = ETA2,
+  mu_tilde = MU_T,
+  eta1_tilde = E1T,
+  eta2_tilde = E2T,
+  e_eta = E_ETA,
+  f_eta = F_ETA,
+  n_thin_gb = 3L
+)
 ```
 
 ## Results {#sec-sim1-results}
 
-For each fitted model, we evaluate:
-
-- **Posterior inclusion probabilities (PIPs)** $\widehat{\pi}_j = \Pr(\gamma_j = 1 \mid \mathbf{y}, \mathbf{X})$ computed as the fraction of post-burn-in MCMC samples with $\gamma_j = 1$.
-- **Variable-selection performance** at threshold $c = 0.5$: true positives (TP), false positives (FP), false discovery rate
-  $\mathrm{FDR} = \mathrm{FP} / (\mathrm{TP} + \mathrm{FP})$,
-  sensitivity $= \mathrm{TP}/p^*$, and F1 score.
-- **MCMC diagnostics** for the representative coefficient $\beta_1$ (the first and most strongly active variable):
-  lag-1 autocorrelation $\rho_1$, effective sample size
-  $\mathrm{ESS} = N / (1 + 2\sum_{\ell=1}^L \rho_\ell)$,
-  Monte Carlo standard error $\mathrm{MCSE} = \hat\sigma_\beta / \sqrt{\mathrm{ESS}}$,
-  and per-second ESS.
+We summarize posterior inclusion probabilities (PIPs), selected predictors
+(PIP $> 0.5$), and selection metrics including TPR, FPR, F1, FDR,
+precision, and model size.
 
 ```{r sim1-results}
-# Helper: extract PIPs
 compute_pip <- function(fit) {
   if (!is.null(fit$gamma_pip)) return(as.numeric(fit$gamma_pip))
   if (is.matrix(fit$gamma))    return(colMeans(fit$gamma))
   stop("No gamma samples available.")
 }
 
-# Helper: compute selection metrics
-compute_metrics <- function(pip, threshold = 0.5, p_star = 10L) {
-  sel <- which(pip >= threshold)
+compute_metrics <- function(pip, threshold = 0.5, p_star = 30L) {
+  sel <- which(pip > threshold)
   tp  <- sum(sel <= p_star)
-  fp  <- sum(sel >  p_star)
+  fp  <- sum(sel > p_star)
   fn  <- p_star - tp
+  tn  <- (length(pip) - p_star) - fp
+
+  precision <- if ((tp + fp) > 0) tp / (tp + fp) else 0
+  tpr       <- if ((tp + fn) > 0) tp / (tp + fn) else 0
+  fpr       <- if ((fp + tn) > 0) fp / (fp + tn) else 0
+  fdr       <- if ((tp + fp) > 0) fp / (tp + fp) else 0
+  f1        <- if ((2 * tp + fp + fn) > 0) (2 * tp) / (2 * tp + fp + fn) else 0
+
   data.frame(
-    TP          = tp,   FP = fp, FN = fn,
-    Sensitivity = round(tp / p_star, 3),
-    FDR         = round(if (length(sel) > 0) fp / length(sel) else 0, 3),
-    F1          = round(if (tp + fp + fn > 0) 2*tp/(2*tp+fp+fn) else 0, 3),
-    N_selected  = length(sel)
+    TP = tp,
+    FP = fp,
+    FN = fn,
+    TN = tn,
+    TPR = round(tpr, 3),
+    FPR = round(fpr, 3),
+    Precision = round(precision, 3),
+    FDR = round(fdr, 3),
+    F1 = round(f1, 3),
+    N_selected = length(sel)
   )
 }
 
-fits_s1 <- list(
-  "MH | Fixed"         = fit_mh_fixed,
-  "MH | GGM"           = fit_mh_ggm,
-  "MH | Glasso"        = fit_mh_glasso,
-  "MH | Glasso+Fixed"  = fit_mh_glasso_fixed,
-  "MH | GGM+Fixed"     = fit_mh_ggm_fixed,
-  "PG | Fixed"         = fit_pg_fixed,
-  "PG | GGM"           = fit_pg_ggm,
-  "PG | Glasso"        = fit_pg_glasso,
-  "PG | Glasso+Fixed"  = fit_pg_glasso_fixed,
-  "PG | GGM+Fixed"     = fit_pg_ggm_fixed
+pip_s1 <- compute_pip(fit_glasso_fixed_1)
+selected_idx <- which(pip_s1 > 0.5)
+
+selected_tab <- data.frame(
+  Predictor = selected_idx,
+  PIP = round(pip_s1[selected_idx], 3)
 )
 
-metrics_s1 <- do.call(rbind, lapply(names(fits_s1), function(nm)
-  cbind(Method = nm, compute_metrics(compute_pip(fits_s1[[nm]])))
-))
-knitr::kable(metrics_s1, row.names = FALSE,
-  caption = paste0("Simulation 1 ($n=500$, $p=100$, $p^*=10$): ",
-                   "variable-selection performance at PIP threshold 0.5."))
-```
-
-```{r sim1-pip-plot, fig.height=8, fig.width=12, fig.cap="Simulation 1: PIPs for the first 40 variables across ten method-sampler combinations. Red bars indicate truly active variables (j = 1,...,10); grey bars indicate null variables. Dashed line at PIP = 0.5."}
-pips_s1  <- lapply(fits_s1, compute_pip)
-show_idx <- 1:40
-col_vec  <- ifelse(show_idx <= p_star, "firebrick", "grey65")
-
-par(mfrow = c(2, 5), mar = c(3, 3, 2, 1))
-for (nm in names(pips_s1)) {
-  barplot(pips_s1[[nm]][show_idx], col = col_vec, border = NA,
-          ylim = c(0, 1), main = nm, ylab = "PIP",
-          names.arg = show_idx, las = 2, cex.names = 0.5)
-  abline(h = 0.5, lty = 2)
-}
-```
-
-```{r sim1-diagnostics}
-# MCMC diagnostics for beta_1 chain
-diag_s1 <- do.call(rbind, lapply(names(fits_s1), function(nm) {
-  beta1 <- as.numeric(fits_s1[[nm]]$beta[, 1L])
-  ess   <- coda::effectiveSize(beta1)
-  data.frame(
-    Method          = nm,
-    PIP_V1          = round(compute_pip(fits_s1[[nm]])[1L], 3),
-    Lag1_ACF        = round(acf(beta1, lag.max = 1L, plot = FALSE)$acf[2L], 3),
-    ESS             = round(ess, 1),
-    MCSE            = round(sd(beta1) / sqrt(max(1, ess)), 4),
-    stringsAsFactors = FALSE
-  )
-}))
-knitr::kable(diag_s1, row.names = FALSE,
-  caption = "Simulation 1: MCMC diagnostics for the first active coefficient $\\beta_1$.")
-```
-
-
-# Simulation Study 2: High-Dimensional Sparse Setting ($n = 100$, $p = 500$) {#sec-sim2}
-
-## Study design {#sec-sim2-design}
-
-We consider a challenging high-dimensional scenario with $n = 100$
-observations, $p = 500$ covariates, and $p^* = 50$ truly active
-variables ($10\%$ of predictors). The first $p^*$ covariates share
-pairwise correlation $\rho = 0.35$; the remaining $p - p^*$ are
-independent standard normals. True coefficients decay linearly from
-$\pm 1.2$ to $\pm 0.2$ in alternating sign.
-
-```{r sim2-data}
-set.seed(2025)
-n_hd     <- 100L; p_hd <- 500L; p_star_hd <- 50L
-
-Sigma_hd <- diag(p_hd)
-Sigma_hd[1:p_star_hd, 1:p_star_hd] <- 0.35
-diag(Sigma_hd) <- 1.0
-
-X_hd <- MASS::mvrnorm(n_hd, mu = rep(0, p_hd), Sigma = Sigma_hd)
-beta_true_hd <- rep(0, p_hd)
-beta_true_hd[1:p_star_hd] <-
-  seq(1.2, 0.2, length.out = p_star_hd) * rep(c(1, -1), length.out = p_star_hd)
-y_hd <- rbinom(n_hd, 1L, plogis(X_hd %*% beta_true_hd))
-```
-
-## Adjacency construction {#sec-sim2-adj}
-
-The same five-method comparison is used (Fixed-50%, GGM-sparse, Glasso,
-Glasso+Fixed, GGM+Fixed-sparse). Since $p > n$, the Bayesian GGM
-backends are run with `sparse = TRUE`, which stores $\mathbf{S} = \mathbf{X}^\top\mathbf{X}$
-in CSC format and performs $O(|\mathcal{E}|)$ neighbourhood operations.
-
-```{r sim2-adj}
-# True adjacency: first p_star block
-R_true2 <- matrix(0L, p_hd, p_hd)
-R_true2[1:p_star_hd, 1:p_star_hd] <- 1L
-diag(R_true2) <- 0L
-
-# External fixed: random 50% of true edges
-set.seed(202502)
-tp2 <- which(upper.tri(R_true2) & R_true2 == 1L, arr.ind = TRUE)
-kp2 <- tp2[sample(nrow(tp2), ceiling(0.5 * nrow(tp2))), ]
-R_ext50_2 <- matrix(0L, p_hd, p_hd)
-R_ext50_2[cbind(kp2[, 1], kp2[, 2])] <- 1L
-R_ext50_2[cbind(kp2[, 2], kp2[, 1])] <- 1L
-diag(R_ext50_2) <- 0L
-
-# Pre-compute sparse scatter matrix for GGM backends
-S_csc <- prepare_sparse_S(X_hd, threshold = 1e-4)
-```
-
-## Five-method comparison under MH with sparse GGM {#sec-sim2-run}
-
-```{r sim2-run}
-MU2   <- qlogis(0.02); ETA2_1 <- 0.05; ETA2_2 <- 0.05
-E_ETA2 <- 1.0; F_ETA2 <- 30.0
-MU2_T  <- qlogis(0.003); E2_1T <- 0.01; E2_2T <- 0.008
-
-niter_s2 <- 50000L; burnin_s2 <- 20000L; thin_s2 <- 1L
-
-fit_s2_fixed <- bvs_mh(X_hd, y_hd,
-  adj_type = "fixed", adj_fixed = R_ext50_2,
-  niter = niter_s2, burnin = burnin_s2, thin = thin_s2,
-  mu = MU2, eta1_sd = ETA2_1, n_mh_gamma = 3L)
-
-fit_s2_ggm <- bvs_mh(X_hd, y_hd,
-  adj_type = "ggm", sparse = TRUE, S_ggm = S_csc,
-  store_gamma = TRUE, store_beta = TRUE, store_Z_pip = TRUE,
-  niter = niter_s2, burnin = burnin_s2, thin = thin_s2,
-  mu = MU2, eta1_sd = ETA2_1, n_mh_gamma = 3L)
-
-fit_s2_glasso <- bvs_mh(X_hd, y_hd,
-  adj_type = "glasso", glasso_criterion = "ebic",
-  niter = niter_s2, burnin = burnin_s2, thin = thin_s2,
-  mu = MU2, eta1_sd = ETA2_1, n_mh_gamma = 3L)
-
-fit_s2_glasso_fixed <- bvs_mh(X_hd, y_hd,
-  adj_type  = "glasso_fixed", adj_fixed = R_ext50_2,
-  glasso_criterion = "ebic",
-  niter = niter_s2, burnin = burnin_s2, thin = thin_s2,
-  mu = MU2, eta1_sd = ETA2_1, eta2_sd = ETA2_2,
-  mu_tilde = MU2_T, eta1_tilde = E2_1T, eta2_tilde = E2_2T,
-  e_eta = E_ETA2, f_eta = F_ETA2, n_mh_gamma = 3L)
-
-fit_s2_ggm_fixed <- bvs_mh(X_hd, y_hd,
-  adj_type = "ggm_fixed", adj_fixed = R_ext50_2,
-  sparse = TRUE, S_ggm = S_csc,
-  store_gamma = TRUE, store_beta = TRUE, store_Z_pip = TRUE,
-  niter = niter_s2, burnin = burnin_s2, thin = thin_s2,
-  mu = MU2, eta1_sd = ETA2_1, eta2_sd = ETA2_2,
-  mu_tilde = MU2_T, eta1_tilde = E2_1T, eta2_tilde = E2_2T,
-  e_eta = E_ETA2, f_eta = F_ETA2, n_mh_gamma = 3L)
-```
-
-## Results {#sec-sim2-results}
-
-```{r sim2-results}
-fits_s2 <- list(
-  "Fixed (50% true)"  = fit_s2_fixed,
-  "GGM (sparse)"      = fit_s2_ggm,
-  "Glasso"            = fit_s2_glasso,
-  "Glasso + Fixed"    = fit_s2_glasso_fixed,
-  "GGM + Fixed (sps)" = fit_s2_ggm_fixed
-)
-
-metrics_s2 <- do.call(rbind, lapply(names(fits_s2), function(nm)
-  cbind(Method = nm,
-        compute_metrics(compute_pip(fits_s2[[nm]]),
-                        p_star = p_star_hd))
-))
-knitr::kable(metrics_s2, row.names = FALSE,
-  caption = paste0("Simulation 2 ($n=100$, $p=500$, $p^*=50$): ",
-                   "variable-selection performance at PIP threshold 0.5."))
-```
-
-```{r sim2-pip-plot, fig.height=7, fig.width=12, fig.cap="Simulation 2: PIPs for the first 70 variables across five MH methods (sparse GGM backends for 'GGM' and 'GGM+Fixed'). Red bars are truly active variables; grey are null. Dashed line at 0.5."}
-pips_s2  <- lapply(fits_s2, compute_pip)
-show2    <- 1:70
-col2     <- ifelse(show2 <= p_star_hd, "firebrick", "grey65")
-
-par(mfrow = c(2, 3), mar = c(3, 3, 2, 1))
-for (nm in names(pips_s2)) {
-  barplot(pips_s2[[nm]][show2], col = col2, border = NA,
-          ylim = c(0, 1), main = nm, ylab = "PIP",
-          names.arg = show2, las = 2, cex.names = 0.4)
-  abline(h = 0.5, lty = 2)
-}
-plot.new()  # fill 6th panel
-```
-
-```{r sim2-diagnostics}
-diag_s2 <- do.call(rbind, lapply(names(fits_s2), function(nm) {
-  pip   <- compute_pip(fits_s2[[nm]])
-  top_j <- which.max(pip)
-  # beta chain: dense matrix or sparse list
-  fit   <- fits_s2[[nm]]
-  beta_j <-
-    if (is.matrix(fit$beta)) as.numeric(fit$beta[, top_j]) else
-    vapply(fit$beta, function(b) {
-      b <- as.matrix(b)
-      if (nrow(b) == 0) return(0)
-      hit <- which(as.integer(b[, 1]) == top_j)
-      if (length(hit)) as.numeric(b[hit[1], 2]) else 0
-    }, numeric(1))
-  ess <- coda::effectiveSize(beta_j)
-  ms  <- if (is.matrix(fit$gamma))
-           rowSums(fit$gamma) else vapply(fit$gamma, length, integer(1))
-  data.frame(
-    Method           = nm,
-    PIP_top          = round(max(pip), 3),
-    Mean_model_size  = round(mean(ms), 1),
-    Lag1_ACF         = round(acf(beta_j, lag.max = 1L, plot = FALSE)$acf[2], 3),
-    ESS              = round(ess, 1),
-    MCSE             = round(sd(beta_j) / sqrt(max(1, ess)), 4),
-    stringsAsFactors = FALSE
-  )
-}))
-knitr::kable(diag_s2, row.names = FALSE,
-  caption = "Simulation 2 MCMC diagnostics for the top-PIP coefficient in each method.")
-```
-
-# Real Metabolomics Case-Control Example {#sec-realdata}
-
-## Study context and data {#sec-realdata-context}
-
-We illustrate the dual-adjacency workflow using the publicly available
-**human cachexia urine metabolomics dataset** distributed by MetaboAnalyst
-[@eisner2010cachexia]. This $^1$H-NMR dataset contains $n = 77$ subjects
-(47 cachexia cases, 30 controls) and $p_{\mathrm{raw}} = 63$ urinary
-metabolite features. Cancer-associated cachexia is a wasting syndrome
-characterized by involuntary weight and muscle mass loss; early metabolomics
-signatures have potential diagnostic and therapeutic value.
-
-The scientific question is: *which urinary metabolites are most strongly
-associated with cachexia case status, taking into account known metabolic
-pathway relationships?*
-
-The dataset is loaded from the MetaboAnalyst public resource:
-
-```{r realdata-load}
-metab_url  <- "https://www.metaboanalyst.ca/resources/data/human_cachexia.csv"
-metab_file <- file.path(tempdir(), "human_cachexia.csv")
-if (!file.exists(metab_file))
-  download.file(metab_url, destfile = metab_file, quiet = TRUE)
-
-metab_raw <- read.csv(metab_file, check.names = FALSE, stringsAsFactors = FALSE)
-cat("Dimensions:", nrow(metab_raw), "subjects x", ncol(metab_raw), "columns\n")
-```
-
-## Data preprocessing {#sec-realdata-prep}
-
-We apply a lightweight, reproducible pipeline:
-
-1. Identify the binary outcome column (`status`/`group`/`class`).
-2. Retain numeric metabolite columns; impute missing values with feature-wise medians.
-3. Remove zero-variance features.
-4. Apply $\log(1 + x)$ transformation (all NMR intensities are non-negative).
-5. Standardize each metabolite to zero mean and unit variance.
-
-Formally, for metabolite $j$ and subject $i$:
-
-$$
-x^*_{ij} =
-\frac{\log(1 + x_{ij}) - \overline{\log(1 + x)}_{\cdot j}}{s_j},
-$$
-
-where $\overline{\log(1+x)}_{\cdot j}$ and $s_j$ are the column mean and
-standard deviation.
-
-```{r realdata-prep}
-# Detect binary outcome column
-outcome_col <- intersect(c("status","group","class","label"),
-                         tolower(names(metab_raw)))[1L]
-outcome_col <- names(metab_raw)[match(outcome_col, tolower(names(metab_raw)))]
-
-# Encode binary outcome
-x_raw <- trimws(as.character(metab_raw[[outcome_col]]))
-is_ctrl <- grepl("control|non.cachexia", tolower(x_raw))
-y_real  <- as.integer(!is_ctrl)
-cat("Cases:", sum(y_real), "  Controls:", sum(1 - y_real), "\n")
-
-# Metabolite matrix
-feat_cols <- setdiff(names(metab_raw), c(outcome_col, "Patient ID", "Sample ID"))
-X_df <- as.data.frame(lapply(metab_raw[, feat_cols, drop = FALSE],
-                              as.numeric), check.names = FALSE)
-# Impute with column medians
-for (j in seq_len(ncol(X_df))) {
-  na_idx <- is.na(X_df[[j]])
-  if (any(na_idx)) X_df[[j]][na_idx] <- median(X_df[[j]], na.rm = TRUE)
-}
-X_mat <- as.matrix(X_df)
-X_mat <- X_mat[, apply(X_mat, 2, var) > 1e-10, drop = FALSE]  # remove zero-var
-X_real <- scale(log1p(X_mat))
-cat(sprintf("After QC: n = %d, p = %d\n", nrow(X_real), ncol(X_real)))
-```
-
-## Sparse fixed adjacency from pathway information {#sec-realdata-adj}
-
-A sparse binary fixed adjacency matrix $\mathbf{R}^{\mathrm{path}} \in \{0,1\}^{p \times p}$
-is constructed from external pathway information. For mapped metabolites $j$ and $k$:
-
-$$
-R^{\mathrm{path}}_{jk} =
-\begin{cases}
-1, & \text{if } j \text{ and } k \text{ share at least one metabolic pathway,} \\
-0, & \text{otherwise,}
-\end{cases}
-\qquad R^{\mathrm{path}}_{jj} = 0.
-$$
-
-Three pathway information sources are supported in order of priority:
-
-1. A user-supplied CSV file (`BVS_DADJ_PATHWAY_FILE`) with columns
-   `metabolite_1`, `metabolite_2` (direct edge list) or `pathway_id`, `metabolite_id`
-   (membership table).
-2. KEGG compound-to-pathway mapping via **KEGGREST** [@Kanehisa2023].
-3. A curated literature-guided panel for cachexia-relevant metabolites
-   (BCAAs, aromatic amino acids, TCA cycle intermediates, ketone bodies,
-   glycolysis-related metabolites).
-
-```{r realdata-adj}
-# Build sparse adjacency from a literature-guided cachexia panel
-build_pathway_adj <- function(feat_names) {
-  norm    <- function(z) tolower(gsub("[^a-z0-9]+", "_", trimws(z)))
-  fn_norm <- norm(feat_names)
-  p       <- length(feat_names)
-  A       <- matrix(0L, p, p, dimnames = list(feat_names, feat_names))
-
-  panel <- list(
-    BCAA       = c("valine", "leucine", "isoleucine"),
-    aromatic   = c("phenylalanine", "tyrosine", "tryptophan"),
-    tca        = c("citrate", "succinate", "fumarate", "malate"),
-    glycolysis = c("glucose", "lactate", "pyruvate", "alanine"),
-    ketone     = c("acetoacetate", "acetone", "hydroxybutyrate")
-  )
-
-  for (grp in panel) {
-    idx <- which(vapply(fn_norm,
-      function(fn) any(vapply(grp, function(g) grepl(g, fn), logical(1))),
-      logical(1)))
-    if (length(idx) < 2L) next
-    pairs <- utils::combn(idx, 2L)
-    A[cbind(pairs[1L, ], pairs[2L, ])] <- 1L
-    A[cbind(pairs[2L, ], pairs[1L, ])] <- 1L
-  }
-  diag(A) <- 0L
-  A
-}
-
-# Attempt KEGG first; fall back to curated panel
-R_pathway <- NULL
-if (requireNamespace("KEGGREST", quietly = TRUE)) {
-  tryCatch({
-    kmap <- KEGGREST::keggLink("pathway", "compound")
-    # ... (KEGG compound-to-feature matching; see package vignette)
-    R_pathway <- build_pathway_adj(colnames(X_real))  # fallback if no hits
-  }, error = function(e) NULL)
-}
-if (is.null(R_pathway)) {
-  R_pathway <- build_pathway_adj(colnames(X_real))
-}
-
-n_edges   <- sum(R_pathway) / 2
-density   <- n_edges / choose(ncol(X_real), 2)
-cat(sprintf("Pathway edges: %d  (density = %.5f)\n", n_edges, density))
-cat(sprintf("Metabolites with >=1 pathway neighbour: %d / %d\n",
-            sum(rowSums(R_pathway) > 0), ncol(X_real)))
-```
-
-## Model fitting {#sec-realdata-fit}
-
-We compare three adjacency strategies for the binary logistic outcome:
-
-| Method | `adj_type` | Adjacency |
-|:-------|:-----------|:----------|
-| Fixed (pathway) | `"fixed"` | $\mathbf{R}^{\mathrm{path}}$ only |
-| GGM (data-driven) | `"ggm"` | Bayesian GGM only |
-| Dual: GGM + pathway | `"ggm_fixed"` | GGM + $\mathbf{R}^{\mathrm{path}}$ |
-
-With $n = 77$ and $p \leq 63$, the dense backend is used throughout.
-MCMC hyperparameters are set for a low expected model size ($\mu = \mathrm{logit}(0.05)$)
-consistent with a sparse metabolomics signal.
-
-```{r realdata-fit}
-MU_R   <- qlogis(0.05)
-ETA_R1 <- 0.10; ETA_R2 <- 0.08
-E_R <- 1.0; F_R <- 20.0
-MU_RT  <- -7.0; E_1T <- 0.004; E_2T <- 0.003
-
-niter_r <- 40000L; burnin_r <- 15000L; thin_r <- 1L
-
-# Single: fixed pathway prior
-fit_real_fixed <- bvs_mh(X_real, y_real,
-  adj_type = "fixed", adj_fixed = R_pathway,
-  niter = niter_r, burnin = burnin_r, thin = thin_r,
-  mu = MU_R, eta1_sd = ETA_R1, n_thin_gb = 3L)
-
-# Single: Bayesian GGM
-fit_real_ggm <- bvs_mh(X_real, y_real,
-  adj_type = "ggm", sparse = FALSE,
-  niter = niter_r, burnin = burnin_r, thin = thin_r,
-  mu = MU_R, eta1_sd = ETA_R1, n_thin_gb = 3L)
-
-# Dual: GGM + pathway
-fit_real_ggm_fixed <- bvs_mh(X_real, y_real,
-  adj_type = "ggm_fixed", adj_fixed = R_pathway, sparse = FALSE,
-  niter = niter_r, burnin = burnin_r, thin = thin_r,
-  mu = MU_R, eta1_sd = ETA_R1, eta2_sd = ETA_R2,
-  mu_tilde = MU_RT, eta1_tilde = E_1T, eta2_tilde = E_2T,
-  e_eta = E_R, f_eta = F_R, n_thin_gb = 3L)
-
-# Optional: glasso single and dual (requires 'huge')
-if (requireNamespace("huge", quietly = TRUE)) {
-  fit_real_glasso <- bvs_mh(X_real, y_real,
-    adj_type = "glasso", glasso_criterion = "ebic",
-    niter = niter_r, burnin = burnin_r, thin = thin_r,
-    mu = MU_R, eta1_sd = ETA_R1, n_thin_gb = 3L)
-
-  fit_real_glasso_fixed <- bvs_mh(X_real, y_real,
-    adj_type = "glasso_fixed", adj_fixed = R_pathway,
-    glasso_criterion = "ebic",
-    niter = niter_r, burnin = burnin_r, thin = thin_r,
-    mu = MU_R, eta1_sd = ETA_R1, eta2_sd = ETA_R2,
-    mu_tilde = MU_RT, eta1_tilde = E_1T, eta2_tilde = E_2T,
-    e_eta = E_R, f_eta = F_R, n_thin_gb = 3L)
-}
-```
-
-## Posterior inclusion summaries {#sec-realdata-pip}
-
-The posterior inclusion probability for metabolite $j$ is:
-
-$$
-\widehat{\mathrm{PIP}}_j = \frac{1}{N_{\mathrm{saved}}}
-\sum_{t=1}^{N_{\mathrm{saved}}} \gamma_j^{(t)},
-$$
-
-and metabolites with $\widehat{\mathrm{PIP}}_j \geq 0.5$ are declared
-selected. We also report the mean posterior model size
-$\bar{M} = \frac{1}{N} \sum_t \sum_j \gamma_j^{(t)}$ and estimated
-coupling parameters $\hat\eta_1$ and $\hat\eta_2$.
-
-```{r realdata-pip-table}
-fits_real <- list(
-  "Fixed (pathway)"     = fit_real_fixed,
-  "GGM"                 = fit_real_ggm,
-  "Dual: GGM + pathway" = fit_real_ggm_fixed
-)
-
-pip_tbl <- do.call(rbind, lapply(names(fits_real), function(nm) {
-  fit  <- fits_real[[nm]]
-  pip  <- compute_pip(fit)
-  ord  <- order(pip, decreasing = TRUE)
-  top5 <- paste(colnames(X_real)[ord[seq_len(min(5L, length(ord)))]], collapse = ", ")
-  ms   <- rowSums(fit$gamma)
-  data.frame(
-    Method              = nm,
-    N_sel_c05           = sum(pip >= 0.5),
-    Mean_model_size     = round(mean(ms), 1),
-    Median_PIP          = round(median(pip), 3),
-    Eta1_mean           = round(mean(fit$eta1), 3),
-    Eta2_mean           = if (!is.null(fit$eta2)) round(mean(fit$eta2), 3)
-                          else NA_real_,
-    Top5_metabolites    = top5,
-    stringsAsFactors    = FALSE
-  )
-}))
-knitr::kable(pip_tbl, row.names = FALSE,
-  caption = paste0("Real metabolomics (cachexia, $n=77$, $p\\leq 63$): ",
-                   "posterior inclusion summaries and coupling estimates."))
-```
-
-```{r realdata-pip-plot, fig.height=5, fig.width=11, fig.cap="Real metabolomics: PIP bar charts for all retained metabolites under Fixed (pathway), GGM, and Dual GGM+pathway models. Dashed line at PIP = 0.5."}
-par(mfrow = c(1, 3), mar = c(7, 3, 2.5, 1))
-for (nm in names(fits_real)) {
-  pip     <- compute_pip(fits_real[[nm]])
-  ord_pip <- order(pip, decreasing = TRUE)
-  barplot(pip[ord_pip], col = "steelblue", border = NA,
-          ylim = c(0, 1), main = nm, ylab = "PIP",
-          names.arg = colnames(X_real)[ord_pip],
-          las = 2, cex.names = 0.55)
-  abline(h = 0.5, lty = 2, col = "firebrick")
-}
-```
-
-## MCMC diagnostics {#sec-realdata-diag}
-
-```{r realdata-diag}
-# Representative top-PIP metabolite across all methods
-all_pip    <- sapply(fits_real, compute_pip)
-top_j_real <- which.max(rowMeans(all_pip))
-top_nm     <- colnames(X_real)[top_j_real]
-
-diag_real  <- do.call(rbind, lapply(names(fits_real), function(nm) {
-  beta_j <- as.numeric(fits_real[[nm]]$beta[, top_j_real])
-  ess    <- coda::effectiveSize(beta_j)
-  data.frame(
-    Method        = nm,
-    Metabolite    = top_nm,
-    PIP           = round(compute_pip(fits_real[[nm]])[top_j_real], 3),
-    Lag1_ACF      = round(acf(beta_j, lag.max = 1, plot = FALSE)$acf[2], 3),
-    ESS           = round(ess, 1),
-    MCSE          = round(sd(beta_j) / sqrt(max(1, ess)), 4),
-    stringsAsFactors = FALSE
-  )
-}))
-knitr::kable(diag_real, row.names = FALSE,
-  caption = paste0("Real metabolomics MCMC diagnostics for the ",
-                   "representative top-PIP urinary metabolite."))
-```
-
-```{r realdata-trace, fig.height=4, fig.width=10, fig.cap="Real metabolomics: trace plots of the representative top-PIP metabolite coefficient for Fixed (pathway), GGM, and Dual GGM+pathway models."}
-par(mfrow = c(1, 3), mar = c(4, 3, 2, 1))
-for (nm in names(fits_real)) {
-  beta_j <- as.numeric(fits_real[[nm]]$beta[, top_j_real])
-  plot(beta_j, type = "l", col = "steelblue",
-       main = paste0(nm, ": ", top_nm),
-       xlab = "Iteration", ylab = expression(beta), cex.main = 0.85)
-}
-```
-
-
-
-# Real-Data Example 2: Golub Leukemia Microarray Classification {#sec-realdata2}
-
-## Study context and data {#sec-realdata2-context}
-
-To demonstrate the practical utility of **BVS.DAdj** in an applied genomic
-setting, we analyze the Golub leukemia microarray dataset [@Golub1999], a
-seminal benchmark for binary biological classification. The dataset contains
-72 samples (47 ALL, 25 AML; binary outcome: ALL = 1) and 7,129 gene
-expression probes. We filter to the top 300 most variable probes for
-a moderate-dimensional problem ($n = 72$, $p = 300$).
-
-We compare five network-prior configurations using the PG sampler:
-
-| Method | `adj_type` | Adjacency source |
-|:-------|:-----------|:-----------------|
-| Glasso | `"glasso"` | Graphical lasso (EBIC) on $\mathbf{X}$ |
-| KEGG fixed | `"fixed"` | Pathway co-membership (KEGG) |
-| Bayesian GGM | `"ggm"` | GGM SSVS updated every iteration |
-| Dual: KEGG + glasso | `"glasso_fixed"` | Glasso + KEGG |
-| Dual: KEGG + GGM | `"ggm_fixed"` | GGM + KEGG |
-
-The external KEGG adjacency links gene pairs co-annotated to the same
-KEGG pathway [@Kanehisa2023] via **KEGGREST**. Since ground-truth active
-genes are not available in real data, we use the simulation-tuned
-hyperparameters (`hpars_real`) with a fixed PIP threshold of 0.5.
-
-## Data preparation {#sec-realdata2-prep}
-
-```{r realdata2-pkgs}
-# Required: multtest (Golub data); optional: hu6800.db (gene symbols)
-# KEGG adjacency: AnnotationDbi, org.Hs.eg.db, KEGGREST
-req_pkgs <- c("multtest")
-if (length(req_pkgs[!vapply(req_pkgs, requireNamespace, logical(1L), quietly = TRUE)]))
-  stop("Install: ", paste(req_pkgs, collapse = ", "))
-if (!requireNamespace("hu6800.db", quietly = TRUE))
-  message("'hu6800.db' not installed; probe IDs used as gene labels.")
-kegg_pkg_ok_real <- all(vapply(c("AnnotationDbi", "org.Hs.eg.db", "KEGGREST"),
-                               requireNamespace, logical(1L), quietly = TRUE))
-```
-
-```{r realdata2-load}
-data(golub, package = "multtest")
-y_real     <- as.integer(golub.cl == 0L)   # ALL = 1, AML = 0
-X_real_raw <- t(golub)                      # 72 x 7129
-
-probe_ids_real <- colnames(X_real_raw)
-if (is.null(probe_ids_real))
-  probe_ids_real <- paste0("probe_", seq_len(ncol(X_real_raw)))
-
-# Map to gene symbols
-if (requireNamespace("hu6800.db", quietly = TRUE) &&
-    requireNamespace("AnnotationDbi", quietly = TRUE)) {
-  syms_real <- tryCatch(
-    AnnotationDbi::mapIds(hu6800.db::hu6800.db, keys = probe_ids_real,
-                          keytype = "PROBEID", column = "SYMBOL",
-                          multiVals = "first"),
-    error = function(e) rep(NA_character_, length(probe_ids_real)))
-  syms_real[is.na(syms_real) | !nzchar(syms_real)] <-
-    probe_ids_real[is.na(syms_real) | !nzchar(syms_real)]
+if (nrow(selected_tab) == 0L) {
+  cat("No predictors selected at PIP > 0.5\n")
 } else {
-  syms_real <- probe_ids_real
-}
-colnames(X_real_raw) <- make.unique(as.character(syms_real))
-
-# Retain top 300 most variable probes; standardize
-keep_real <- order(apply(X_real_raw, 2L, var), decreasing = TRUE)[seq_len(300L)]
-X_real    <- scale(X_real_raw[, keep_real, drop = FALSE])
-cat(sprintf("Golub: n = %d, p = %d  (ALL: %d, AML: %d)\n",
-            nrow(X_real), ncol(X_real), sum(y_real), sum(1L - y_real)))
-```
-
-## KEGG-based external adjacency {#sec-realdata2-adj}
-
-```{r realdata2-kegg}
-build_kegg_adjacency_real <- function(symbols) {
-  p <- length(symbols); R <- matrix(0L, p, p)
-  if (!kegg_pkg_ok_real) return(R)
-  entrez <- tryCatch(
-    AnnotationDbi::mapIds(org.Hs.eg.db::org.Hs.eg.db, keys = symbols,
-                          keytype = "SYMBOL", column = "ENTREZID",
-                          multiVals = "first"),
-    error = function(e) rep(NA_character_, p))
-  map_df <- data.frame(idx = seq_len(p), entrez = as.character(entrez),
-                       stringsAsFactors = FALSE)
-  map_df <- map_df[!is.na(map_df$entrez) & nzchar(map_df$entrez), ]
-  if (!nrow(map_df)) return(R)
-  kmap <- tryCatch(KEGGREST::keggLink("pathway", "hsa"), error = function(e) NULL)
-  if (is.null(kmap)) return(R)
-  gp <- data.frame(entrez  = sub("^hsa:", "", names(kmap)),
-                   pathway = sub("^path:", "", unname(kmap)),
-                   stringsAsFactors = FALSE)
-  for (g in split(as.integer(merge(map_df, gp, by = "entrez")$idx),
-                  merge(map_df, gp, by = "entrez")$pathway)) {
-    g <- sort(unique(g))
-    if (length(g) < 2L) next
-    cmb <- utils::combn(g, 2L)
-    R[cbind(cmb[1L, ], cmb[2L, ])] <- 1L
-    R[cbind(cmb[2L, ], cmb[1L, ])] <- 1L
-  }
-  diag(R) <- 0L; R
-}
-
-# Fallback: top-1% correlation pairs
-fallback_real_adj <- function(X) {
-  C <- abs(stats::cor(X, use = "pairwise.complete.obs")); diag(C) <- 0
-  thr <- as.numeric(quantile(C[upper.tri(C)], probs = 0.99, na.rm = TRUE))
-  R <- matrix(as.integer(C >= thr), nrow(C), ncol(C)); diag(R) <- 0L; R
-}
-
-R_kegg_real <- if (kegg_pkg_ok_real)
-  tryCatch(build_kegg_adjacency_real(colnames(X_real)),
-           error = function(e) fallback_real_adj(X_real))
-else fallback_real_adj(X_real)
-
-cat(sprintf("KEGG edges: %d  (density = %.5f)\n",
-            sum(R_kegg_real) / 2L,
-            sum(R_kegg_real) / 2 / choose(ncol(X_real), 2)))
-```
-
-## Fitting five BVS models {#sec-realdata2-fit}
-
-Eta/Möller hyperparameters are transferred from the Simulation 1 tuning
-exercise, ensuring consistent prior calibration.
-
-```{r realdata2-fit}
-hpars_real <- list(mu = qlogis(0.02), eta1_sd = 0.06, eta2_sd = 0.05,
-                   e_eta = 1.0, f_eta = 25.0,
-                   mu_tilde = qlogis(0.003),
-                   eta1_tilde = 0.008, eta2_tilde = 0.006)
-niter_real <- 40000L; burnin_real <- 15000L; thin_real <- 1L
-pip_threshold_real <- 0.5
-
-bvs_pg_real <- function(...) bvs_pg(
-  X_real, y_real,
-  niter = niter_real, burnin = burnin_real, thin = thin_real,
-  mu = hpars_real$mu, eta1_sd = hpars_real$eta1_sd,
-  e_eta = hpars_real$e_eta, f_eta = hpars_real$f_eta,
-  mu_tilde = hpars_real$mu_tilde, eta1_tilde = hpars_real$eta1_tilde, ...)
-
-t_glasso   <- system.time(fit_glasso   <- bvs_pg_real(adj_type = "glasso",
-                              glasso_criterion = "ebic"))
-t_fixed    <- system.time(fit_fixed    <- bvs_pg_real(adj_type = "fixed",
-                              adj_fixed = R_kegg_real))
-t_ggm      <- system.time(fit_ggm      <- bvs_pg_real(adj_type = "ggm"))
-t_dual_gl  <- system.time(fit_dual_gl  <- bvs_pg_real(
-                              adj_type = "glasso_fixed", adj_fixed = R_kegg_real,
-                              glasso_criterion = "ebic",
-                              eta2_sd = hpars_real$eta2_sd,
-                              eta2_tilde = hpars_real$eta2_tilde))
-t_dual_ggm <- system.time(fit_dual_ggm <- bvs_pg_real(
-                              adj_type = "ggm_fixed", adj_fixed = R_kegg_real,
-                              eta2_sd = hpars_real$eta2_sd,
-                              eta2_tilde = hpars_real$eta2_tilde))
-
-fits_real  <- list("Single: glasso" = fit_glasso, "Single: KEGG fixed" = fit_fixed,
-                   "Single: Bayesian GGM" = fit_ggm,
-                   "Dual: KEGG + glasso" = fit_dual_gl,
-                   "Dual: KEGG + Bayesian GGM" = fit_dual_ggm)
-times_real <- c("Single: glasso" = t_glasso["elapsed"],
-                "Single: KEGG fixed" = t_fixed["elapsed"],
-                "Single: Bayesian GGM" = t_ggm["elapsed"],
-                "Dual: KEGG + glasso" = t_dual_gl["elapsed"],
-                "Dual: KEGG + Bayesian GGM" = t_dual_ggm["elapsed"])
-```
-
-## Results {#sec-realdata2-results}
-
-```{r realdata2-selected}
-selected_tbl <- do.call(rbind, lapply(names(fits_real), function(mn) {
-  pip <- compute_pip(fits_real[[mn]])
-  sel <- which(pip >= pip_threshold_real)
-  ord <- order(pip, decreasing = TRUE)
-  data.frame(
-    Method                = mn,
-    N_selected            = length(sel),
-    Top10_genes_by_PIP    = paste(colnames(X_real)[ord[seq_len(min(10L, length(ord)))]],
-                                  collapse = ", "),
-    stringsAsFactors = FALSE
+  knitr::kable(
+    selected_tab,
+    row.names = FALSE,
+    caption = "Predictors selected by glasso-fixed with PIP > 0.5 (seed 2024 chain)."
   )
-}))
-knitr::kable(selected_tbl, row.names = FALSE,
-  caption = paste0("Golub leukemia ($n=72$, $p=300$): genes selected at ",
-                   "PIP $\\geq$ 0.5 across five adjacency configurations."))
-```
-
-```{r realdata2-pip-plot, fig.height=6, fig.width=12, fig.cap="Golub leukemia: PIP profiles for top 40 probes. Red dashed line at PIP = 0.5."}
-ord_real <- order(compute_pip(fits_real[["Dual: KEGG + Bayesian GGM"]]),
-                  decreasing = TRUE)
-top40    <- ord_real[seq_len(min(40L, length(ord_real)))]
-par(mfrow = c(2, 3), mar = c(5, 3, 2.5, 1))
-for (mn in names(fits_real)) {
-  pip <- compute_pip(fits_real[[mn]])
-  barplot(pip[top40], col = "steelblue", border = NA, ylim = c(0, 1),
-          main = mn, ylab = "PIP", names.arg = colnames(X_real)[top40],
-          las = 2, cex.names = 0.45)
-  abline(h = pip_threshold_real, lty = 2, col = "firebrick")
-}
-plot.new()
-```
-
-```{r realdata2-diag}
-top_real <- which.max(rowMeans(sapply(fits_real, compute_pip)))
-top_real_nm <- colnames(X_real)[top_real]
-diag_real2 <- do.call(rbind, lapply(names(fits_real), function(mn) {
-  pip    <- compute_pip(fits_real[[mn]])
-  beta_j <- as.numeric(fits_real[[mn]]$beta[, top_real])
-  ess    <- coda::effectiveSize(beta_j)
-  ms     <- rowSums(fits_real[[mn]]$gamma)
-  data.frame(Method = mn,
-    PIP_top         = round(pip[top_real], 3),
-    Mean_model_size = round(mean(ms), 1),
-    Lag1_ACF        = round(acf(beta_j, lag.max = 1L, plot = FALSE)$acf[2L], 3),
-    ESS             = round(ess, 1),
-    Runtime_sec     = round(times_real[mn], 1),
-    stringsAsFactors = FALSE)
-}))
-knitr::kable(diag_real2, row.names = FALSE,
-  caption = paste0("Golub leukemia MCMC diagnostics for top-PIP gene: ",
-                   top_real_nm, "."))
-```
-
-# Real-Data Example 3: Colon Cancer Microarray ($p \gg n$) with Sparse BVS {#sec-realdata3}
-
-## Study context {#sec-realdata3-context}
-
-To validate the sparse high-dimensional backend, we apply **BVS.DAdj** to
-the Alon et al. colon cancer microarray dataset [@Alon1999], available via
-the **colonCA** Bioconductor package ($n = 111$, 40 tumor / 71 normal;
-2,000 pre-selected probes). We retain the top 300 most variable probes,
-establishing a $p \gg n$ regime that exercises the CSC-format sparse GGM
-and MH backends. A KEGG-derived fixed adjacency is constructed as in
-Section\ 7; a correlation-based fallback is used when KEGG packages are
-unavailable.
-
-## Data preparation {#sec-realdata3-prep}
-
-```{r realdata3-load}
-if (!requireNamespace("colonCA", quietly = TRUE))
-  stop("Install 'colonCA': BiocManager::install('colonCA')")
-data(colonCA, package = "colonCA")
-
-y_hd <- as.integer(Biobase::phenoData(colonCA)$class == "T")
-X_cc <- t(Biobase::exprs(colonCA))
-
-probe_hd <- rownames(Biobase::exprs(colonCA))
-if (is.null(probe_hd)) probe_hd <- paste0("probe_", seq_len(ncol(X_cc)))
-
-kegg_pkg_ok_hd <- all(vapply(
-  c("AnnotationDbi", "org.Hs.eg.db", "KEGGREST", "hgu95av2.db"),
-  requireNamespace, logical(1L), quietly = TRUE))
-
-if (kegg_pkg_ok_hd) {
-  syms_hd <- tryCatch(
-    AnnotationDbi::mapIds(hgu95av2.db::hgu95av2.db, keys = probe_hd,
-                          keytype = "PROBEID", column = "SYMBOL",
-                          multiVals = "first"),
-    error = function(e) rep(NA_character_, length(probe_hd)))
-  syms_hd[is.na(syms_hd) | !nzchar(syms_hd)] <-
-    probe_hd[is.na(syms_hd) | !nzchar(syms_hd)]
-} else { syms_hd <- probe_hd }
-
-colnames(X_cc) <- make.unique(as.character(syms_hd))
-
-keep_hd <- order(apply(X_cc, 2L, var), decreasing = TRUE)[seq_len(300L)]
-X_hd    <- scale(X_cc[, keep_hd, drop = FALSE])
-cat(sprintf("colonCA: n = %d, p = %d  (Tumor: %d, Normal: %d)\n",
-            nrow(X_hd), ncol(X_hd), sum(y_hd), sum(1L - y_hd)))
-```
-
-## KEGG adjacency and sparse scatter matrix {#sec-realdata3-adj}
-
-```{r realdata3-kegg-sparse}
-# Re-use build_kegg_adjacency_real (defined in Section 7), adapt for hgu95av2.db
-build_kegg_adjacency_hd <- function(symbols) {
-  p <- length(symbols); R <- matrix(0L, p, p)
-  if (!kegg_pkg_ok_hd) return(R)
-  entrez <- tryCatch(
-    AnnotationDbi::mapIds(org.Hs.eg.db::org.Hs.eg.db, keys = symbols,
-                          keytype = "SYMBOL", column = "ENTREZID",
-                          multiVals = "first"),
-    error = function(e) rep(NA_character_, p))
-  map_df <- data.frame(idx = seq_len(p), entrez = as.character(entrez),
-                       stringsAsFactors = FALSE)
-  map_df <- map_df[!is.na(map_df$entrez) & nzchar(map_df$entrez), ]
-  if (!nrow(map_df)) return(R)
-  kmap <- tryCatch(KEGGREST::keggLink("pathway", "hsa"), error = function(e) NULL)
-  if (is.null(kmap)) return(R)
-  gp <- data.frame(entrez = sub("^hsa:", "", names(kmap)),
-                   pathway = sub("^path:", "", unname(kmap)),
-                   stringsAsFactors = FALSE)
-  hit <- merge(map_df, gp, by = "entrez")
-  for (g in split(as.integer(hit$idx), hit$pathway)) {
-    g <- sort(unique(g)); if (length(g) < 2L) next
-    cmb <- utils::combn(g, 2L)
-    R[cbind(cmb[1L,], cmb[2L,])] <- 1L; R[cbind(cmb[2L,], cmb[1L,])] <- 1L
-  }
-  diag(R) <- 0L; R
 }
 
-fallback_hd_adj <- function(X) {
-  C <- abs(stats::cor(X, use = "pairwise.complete.obs")); diag(C) <- 0
-  thr <- as.numeric(quantile(C[upper.tri(C)], probs = 0.99, na.rm = TRUE))
-  R <- matrix(as.integer(C >= thr), nrow(C), ncol(C)); diag(R) <- 0L; R
-}
-
-R_kegg_hd <- if (kegg_pkg_ok_hd)
-  tryCatch(build_kegg_adjacency_hd(colnames(X_hd)),
-           error = function(e) fallback_hd_adj(X_hd))
-else fallback_hd_adj(X_hd)
-
-cat(sprintf("HD KEGG edges: %d  (density = %.6f)\n",
-            sum(R_kegg_hd) / 2L,
-            sum(R_kegg_hd) / 2 / choose(ncol(X_hd), 2)))
-
-# CSC scatter matrix for sparse GGM backend
-S_hd_real <- prepare_sparse_S(X_hd, threshold = 1e-4)
+metrics_s1 <- compute_metrics(pip_s1, threshold = 0.5, p_star = p_star)
+knitr::kable(
+  metrics_s1,
+  row.names = FALSE,
+  caption = "Simulation 1 (glasso-fixed): variable-selection metrics at PIP threshold 0.5."
+)
 ```
 
-## Sparse model fitting {#sec-realdata3-fit}
-
-We fit three models with the sparse MH backend (`sparse = TRUE`):
-sparse GGM only, dual sparse GGM + KEGG, and KEGG-fixed (dense baseline).
-
-```{r realdata3-fit}
-hpars_hd <- list(mu = qlogis(0.01), eta1_sd = 0.04, eta2_sd = 0.03,
-                 e_eta = 1.0, f_eta = 35.0,
-                 mu_tilde = qlogis(5e-4),
-                 eta1_tilde = 0.005, eta2_tilde = 0.004)
-niter_hd_r <- 60000L; burnin_hd_r <- 25000L; thin_hd_r <- 1L
-
-fit_hd_ggm <- bvs_mh(X_hd, y_hd, adj_type = "ggm", sparse = TRUE, S_ggm = S_hd_real,
-  store_gamma = TRUE, store_beta = TRUE, store_Z_pip = TRUE,
-  niter = niter_hd_r, burnin = burnin_hd_r, thin = thin_hd_r,
-  mu = hpars_hd$mu, eta1_sd = hpars_hd$eta1_sd,
-  e_eta = hpars_hd$e_eta, f_eta = hpars_hd$f_eta,
-  mu_tilde = hpars_hd$mu_tilde, eta1_tilde = hpars_hd$eta1_tilde, n_mh_gamma = 5L)
-
-fit_hd_dual <- bvs_mh(X_hd, y_hd, adj_type = "ggm_fixed", adj_fixed = R_kegg_hd,
-  sparse = TRUE, S_ggm = S_hd_real,
-  store_gamma = TRUE, store_beta = TRUE, store_Z_pip = TRUE,
-  niter = niter_hd_r, burnin = burnin_hd_r, thin = thin_hd_r,
-  mu = hpars_hd$mu, eta1_sd = hpars_hd$eta1_sd, eta2_sd = hpars_hd$eta2_sd,
-  e_eta = hpars_hd$e_eta, f_eta = hpars_hd$f_eta,
-  mu_tilde = hpars_hd$mu_tilde,
-  eta1_tilde = hpars_hd$eta1_tilde, eta2_tilde = hpars_hd$eta2_tilde, n_mh_gamma = 5L)
-
-fit_hd_fixed <- bvs_mh(X_hd, y_hd, adj_type = "fixed", adj_fixed = R_kegg_hd,
-  niter = niter_hd_r, burnin = burnin_hd_r, thin = thin_hd_r,
-  mu = hpars_hd$mu, eta1_sd = hpars_hd$eta1_sd,
-  e_eta = hpars_hd$e_eta, f_eta = hpars_hd$f_eta,
-  mu_tilde = hpars_hd$mu_tilde, eta1_tilde = hpars_hd$eta1_tilde, n_mh_gamma = 5L)
-
-fits_hd_real <- list("GGM (sparse)" = fit_hd_ggm,
-                     "Dual: GGM + KEGG" = fit_hd_dual,
-                     "Fixed: KEGG" = fit_hd_fixed)
+```{r sim1-pip-plot, fig.height=4.8, fig.width=6.4, out.width="95%", fig.align='center', fig.cap="Simulation 1 (glasso-fixed): PIPs for all 100 predictors. Red bars are true active predictors (1--30); grey bars are null predictors; dashed line is PIP = 0.5."}
+idx <- 1:p
+bar_col <- ifelse(idx <= p_star, "firebrick", "grey70")
+op <- par(no.readonly = TRUE)
+on.exit(par(op), add = TRUE)
+par(mar = c(4.2, 4.2, 2.2, 1.0))
+barplot(
+  pip_s1[idx],
+  col = bar_col,
+  border = NA,
+  ylim = c(0, 1),
+  ylab = "PIP",
+  xlab = "Predictor index",
+  main = "glasso-fixed PIP profile"
+)
+abline(h = 0.5, lty = 2)
 ```
 
-## Results {#sec-realdata3-results}
+## MCMC Convergence Diagnostics {#sec-sim1-diag}
 
-```{r realdata3-results}
-hd_tbl <- do.call(rbind, lapply(names(fits_hd_real), function(nm) {
-  fit <- fits_hd_real[[nm]]; pip <- compute_pip(fit)
-  ord <- order(pip, decreasing = TRUE)
-  ms  <- if (is.matrix(fit$gamma)) rowSums(fit$gamma)
-         else vapply(fit$gamma, length, integer(1L))
-  data.frame(
-    Method          = nm,
-    N_sel_c05       = sum(pip >= 0.5),
-    Mean_model_size = round(mean(ms), 1),
-    Max_PIP         = round(max(pip), 3),
-    Top5_probes     = paste(colnames(X_hd)[ord[seq_len(min(5L, length(ord)))]],
-                            collapse = ", "),
-    Eta1_mean       = round(mean(fit$eta1), 3),
-    Eta2_mean       = if (!is.null(fit$eta2)) round(mean(fit$eta2), 3) else NA_real_,
-    stringsAsFactors = FALSE)
-}))
-knitr::kable(hd_tbl, row.names = FALSE,
-  caption = paste0("colonCA ($n=111$, $p=300$): ",
-                   "sparse GGM, dual GGM+KEGG, and KEGG-fixed results."))
+We report trace plot, ACF plot, Gelman--Rubin $\hat{R}$, and effective sample
+size (ESS) using two independent chains.
+
+```{r sim1-trace, fig.height=4.2, fig.width=6.4, out.width="90%", fig.align='center', fig.cap="Trace plot of the first active coefficient $\\beta_1$ for glasso-fixed (seed 2024 chain)."}
+beta1_chain <- as.numeric(fit_glasso_fixed_1$beta[, 1L])
+op <- par(no.readonly = TRUE)
+on.exit(par(op), add = TRUE)
+par(mar = c(4.2, 4.2, 2.2, 1.0))
+plot(
+  beta1_chain,
+  type = "l",
+  col = "steelblue4",
+  xlab = "Iteration (post-runin)",
+  ylab = expression(beta[1]),
+  main = expression("Trace plot for " * beta[1])
+)
 ```
 
-```{r realdata3-pip-plot, fig.height=4, fig.width=11, fig.cap="colonCA (p>>n): PIP bar charts for top 40 probes across sparse GGM, Dual GGM+KEGG, and KEGG-fixed configurations."}
-ord_hd <- order(compute_pip(fit_hd_dual), decreasing = TRUE)
-top_hd <- ord_hd[seq_len(min(40L, length(ord_hd)))]
-par(mfrow = c(1, 3), mar = c(6, 3, 2.5, 1))
-for (nm in names(fits_hd_real)) {
-  pip <- compute_pip(fits_hd_real[[nm]])
-  barplot(pip[top_hd], col = "steelblue", border = NA, ylim = c(0, 1),
-          main = nm, ylab = "PIP",
-          names.arg = colnames(X_hd)[top_hd], las = 2, cex.names = 0.4)
-  abline(h = 0.5, lty = 2, col = "firebrick")
-}
+```{r sim1-acf, fig.height=4.2, fig.width=6.4, out.width="90%", fig.align='center', fig.cap="ACF plot of $\\beta_1$ for glasso-fixed (seed 2024 chain)."}
+acf(beta1_chain, main = expression("ACF for " * beta[1]))
 ```
 
-```{r realdata3-ggm-edges}
-if (!is.null(fit_hd_dual$Z_pip)) {
-  Z <- as.matrix(fit_hd_dual$Z_pip)
-  strong <- which(Z > 0.5 & upper.tri(Z), arr.ind = TRUE)
-  cat("GGM edges with PIP > 0.5:", nrow(strong), "\n")
-  if (nrow(strong) > 0L)
-    print(head(data.frame(
-      Gene_i = colnames(X_hd)[strong[, 1L]],
-      Gene_j = colnames(X_hd)[strong[, 2L]],
-      GGM_PIP = round(Z[strong], 3))))
-}
-```
+```{r sim1-rhat-ess}
+beta_chain_1 <- as.matrix(fit_glasso_fixed_1$beta)
+beta_chain_2 <- as.matrix(fit_glasso_fixed_2$beta)
 
+n_keep <- min(nrow(beta_chain_1), nrow(beta_chain_2))
+mcmc_1 <- coda::mcmc(beta_chain_1[1:n_keep, , drop = FALSE])
+mcmc_2 <- coda::mcmc(beta_chain_2[1:n_keep, , drop = FALSE])
+mcmc_list <- coda::mcmc.list(mcmc_1, mcmc_2)
+
+rhat_vec <- coda::gelman.diag(mcmc_list, autoburnin = FALSE, multivariate = FALSE)$psrf[, "Point est."]
+ess_vec  <- as.numeric(coda::effectiveSize(mcmc_list))
+
+diag_tab <- data.frame(
+  Predictor = 1:p,
+  Rhat = round(rhat_vec, 3),
+  ESS = round(ess_vec, 1)
+)
+
+knitr::kable(
+  diag_tab[1:20, ],
+  row.names = FALSE,
+  caption = "First 20 predictors: R-hat and effective sample size (ESS) from two chains."
+)
+
+diag_summary <- data.frame(
+  Metric = c("Max Rhat", "Median Rhat", "Min ESS", "Median ESS"),
+  Value = c(
+    round(max(rhat_vec, na.rm = TRUE), 3),
+    round(median(rhat_vec, na.rm = TRUE), 3),
+    round(min(ess_vec, na.rm = TRUE), 1),
+    round(median(ess_vec, na.rm = TRUE), 1)
+  )
+)
+
+knitr::kable(
+  diag_summary,
+  row.names = FALSE,
+  caption = "Overall convergence summary for glasso-fixed."
+)
+```
 # Summary and Discussion {#sec-summary}
 
 
@@ -1860,24 +1052,11 @@ domain knowledge (e.g., a biological pathway database) and one estimated
 from data (e.g., via Bayesian GGM)---with coupling strengths inferred from
 data via the Möller auxiliary variable approach.
 
-**Simulation results** confirm that:
-
-- In moderate dimensions ($n=500$, $p=100$), all five adjacency methods
-  achieve high sensitivity and low FDR when true edges are partially
-  captured by the external fixed matrix. Dual-adjacency methods (GGM+Fixed,
-  Glasso+Fixed) generally improve over single-source methods when pathway
-  information overlaps with the true graph.
-- In high dimensions ($n=100$, $p=500$), the sparse GGM backend enables
-  scalable inference. The combination of a sparse pathway prior with a
-  data-driven GGM (dual `ggm_fixed`) provides robustness when external
-  pathway coverage is incomplete.
-
-**Real data illustration** on the cachexia urine metabolomics dataset
-demonstrates that the dual GGM+pathway model can leverage both
-data-driven associations and prior metabolic pathway knowledge. Metabolites
-in the BCAA and TCA cycle pathways (e.g., leucine, valine, citrate)
-receive consistently elevated PIPs across methods, consistent with known
-cachexia-associated metabolic reprogramming.
+**Simulation results** in this vignette focus on the first moderate-dimensional
+example ($n=500$, $p=100$) with the `glasso_fixed` method only. We provide
+code to summarize PIPs, selected predictors at PIP $> 0.5$, and
+variable-selection metrics (TPR, FPR, F1, FDR, precision), together with
+trace/ACF diagnostics and two-chain convergence summaries via $\\hat{R}$ and ESS.
 
 **Limitations and future directions.** The current implementation focuses
 on binary, Gaussian, Cox-TTE, and count outcomes for cross-sectional
@@ -1897,601 +1076,4 @@ It requires R $\geq$ 3.5.0 with **Rcpp**, **RcppArmadillo**, and
 **Matrix**. The **huge** package is recommended for graphical lasso
 adjacency estimation. All analyses in this article used R version 4.3.
 
-# Implementation History and Audit Report {#sec-audit}
-
-This section provides the complete technical record of all correctness fixes,
-performance improvements, and new algorithmic features applied to `BVS.DAdj`
-following a comprehensive line-by-line code audit. For each change we document
-the affected C++/R function or struct, the mathematical formula where applicable,
-and the primary academic reference.
-
-## Audit Overview
-
-| Severity | Identified | Fixed | Status |
-|----------|-----------|-------|--------|
-| CRITICAL | 6 | 6 | All fixed |
-| HIGH | 10 | 9 | SPG-2 deferred (future work) |
-| MEDIUM | 21 | 21 | 3 superseded by IMP-1 |
-| LOW | 8 | 5 | 3 mitigated/documented |
-
-Files audited: 15 C++ source/header files (4 shared headers + 11 backend `.cpp`
-files + `RcppExports.cpp`), 9 R source files. Total issues: 45.
-
-## Phase 1: Critical Bug Fixes
-
-### [BPG-1] PCG Beta Sampler: Wrong Noise Term {#sec-bpg1}
-
-**Header:** `src/BayesLogit_BlockPG.h`
-**Functions:** `pcg_sample_beta()`, `pcg_sample_beta_sparse()`
-**Status: FIXED**
-
-The Papandreou-Yuille trick for sampling from
-$\boldsymbol{\beta} \mid \boldsymbol{\omega}, \boldsymbol{\gamma}
-\sim \text{N}(P^{-1}\boldsymbol{b},\; P^{-1})$,
-$P = X_{\text{act}}^T \Omega X_{\text{act}} + \sigma^{-2} I$,
-requires constructing a perturbed right-hand side
-$\boldsymbol{b}^* = \boldsymbol{b} + \boldsymbol{v}_1 + \boldsymbol{v}_2$
-with $\boldsymbol{v}_1 \sim \text{N}(\boldsymbol{0}, X_{\text{act}}^T \Omega X_{\text{act}})$
-and $\boldsymbol{v}_2 \sim \text{N}(\boldsymbol{0}, \sigma^{-2} I)$, then solving
-$P\hat{\boldsymbol{\beta}} = \boldsymbol{b}^*$ via CG [@NishimuraSuchard2022].
-The original code added only $\sqrt{M} \odot \boldsymbol{z}$ (diagonal square root
-of the preconditioner $M = \text{diag}(P)$), which is correct only when $P$ is
-diagonal (orthogonal predictors). Fix:
-
-```{r eval=FALSE}
-# Dense backend:
-arma::vec v1_noise = X_act.t() * (arma::sqrt(omega_pg) % arma::randn<arma::vec>(n));
-arma::vec v2_noise = std::sqrt(inv_sigmasq) * arma::randn<arma::vec>(p_act);
-arma::vec b_star   = rhs + v1_noise + v2_noise;  // CG solves P * beta = b_star
-# Sparse path: same construction using CSC column iterators; no dense X_act formed
-```
-
-*Impact:* Incorrect posterior variance for beta whenever predictors are correlated
-(active precision matrix $P$ is non-diagonal). Affects all PG backends.
-*Reference:* @NishimuraSuchard2022.
-
-### [SNG-1] Redundant $O(p^3)$ Inversion Every Iteration {#sec-sng1}
-
-**File:** `src/BayesLogit_SingleNet_GGM.cpp` (main MCMC loop, before GGM sweep)
-**Status: FIXED**
-
-`arma::inv_sympd(arma::symmatu(Sig_ggm))` was called at the start of every
-iteration despite $\Sigma_{\text{ggm}}$ being maintained via rank-1 Schur
-complement updates. `DualNet_GGM` had already removed this (annotated "FIX 1");
-`SingleNet_GGM` had not. For $p = 200$, this wastes $\sim 8 \times 10^6$ FLOP
-per iteration. Fix: deleted; numerical drift handled by IMP-4 periodic reset.
-
-### [SNG-2] $Z_{\text{pip}}$ Deflated by Factor of `thin` {#sec-sng2}
-
-**File:** `src/BayesLogit_SingleNet_GGM.cpp`
-**Variable:** `Z_pip` accumulator; denominator at `n_pip_denom`
-**Status: FIXED**
-
-$\hat{\pi}_{ij}$ was computed as (accumulated sum) / `niter`, but `Z_pip` is
-incremented at most $n_{\text{save}} = \text{niter}/\text{thin}$ times
-(thinned iterations only). Result: $\hat{\pi}_{ij}$ underestimated by factor
-`thin`. Fix: `n_pip_denom = static_cast<double>(n_save)`.
-
-### [SPH-1] `eta1_sd` Conflates Proposal SD and Upper Bound {#sec-sph1}
-
-**Header:** `src/BayesLogit_Sparse_Helpers.h` (Möller update helpers)
-**File:** `src/BayesLogit_PG_SingleAdj_GGM_Moller.cpp`
-**Status: FIXED** (superseded by IMP-1)
-
-`R::rnorm(eta1, eta1_sd)` with rejection loop
-`while (eta1_new <= 0 || eta1_new >= eta1_sd)` conflates the proposal scale
-with the support upper bound. When `eta1_sd` = 0.5, the acceptance region
-$(0, 0.5)$ spans one standard deviation, so ~68% of proposals are redrawn;
-the loop hits its 10,000-iteration limit almost every call, returning the current
-value (no move). Fix: replaced entirely by IMP-1 logit-transform proposal (Section \@ref(sec-imp1)).
-
-### [PSGM-1] `Sig_ggm` Numerical Drift Without Periodic Reset {#sec-psgm1}
-
-**File:** `src/BayesLogit_PG_SingleAdj_GGM_Moller.cpp` (GGM column sweep)
-**Status: FIXED** (by IMP-4)
-
-Rank-1 Schur complement updates accumulate IEEE 754 rounding error
-$O(k \cdot p \cdot \varepsilon_{\text{mach}} \cdot \kappa(\Sigma))$ after $k$
-iterations [@Higham2002; @GolubVanLoan2013]. `PG_SingleAdj_GGM_Moller`
-had removed its periodic `inv_sympd` reset without replacement, causing
-Cholesky failures after thousands of iterations. Fix: IMP-4 periodic reset
-(Section \@ref(sec-imp4)).
-
-### [SPG-3] Missing $\beta_0$ Prior Mean in Sparse PG Posterior {#sec-spg3}
-
-**Files:** `src/BayesLogit_PG_DualNet_SparseGGM.cpp`,
-`src/BayesLogit_PG_SingleAdj_SparseGGM.cpp`
-**Status: FIXED**
-
-The Pólya-Gamma augmented posterior requires
-$\boldsymbol{b} = X_{\text{act}}^T\boldsymbol{\kappa}
-+ (\beta_0/\sigma^2)\mathbf{1}_{p_{\text{act}}}$
-[@PG2013]. Both sparse PG backends set `rhs = X_act.t() * z_star`, omitting the
-prior mean term `(beta0/sigmasq)*arma::ones<arma::vec>(p_act)`.
-Bias magnitude: $(\beta_0/\sigma^2) P^{-1}\mathbf{1}$, non-zero whenever
-`beta0 != 0`. Compare with `PG_SingleAdj_GGM_Moller.cpp` which correctly includes it.
-
-## Phase 2: High-Priority Fixes
-
-### [BPG-2] Sparse PCG Materialises $O(np)$ Dense Matrix {#sec-bpg2}
-
-**Header:** `src/BayesLogit_BlockPG.h`
-**Function:** `pcg_sample_beta_sparse()`
-**Status: FIXED**
-
-Constructed `arma::mat X_act(n, p_act, fill::zeros)`, an $n \times p_{\text{act}}$
-dense materialisation before calling the dense PCG solver.
-For $n = 10^5$, $p_{\text{act}} = 500$: 400 MB allocation, O(np) mat-vec.
-Fix: CG mat-vec via CSC column iterators (no dense materialisation):
-
-```{r eval=FALSE}
-# Sparse Pv = (X'_act Omega X_act + sig^{-2} I) v  without forming X_act
-for (int k = 0; k < p_act; ++k) {
-  int j = active_idx[k];
-  for (sp_mat::const_col_iterator it = X.begin_col(j); it != X.end_col(j); ++it)
-    Xv(it.row()) += (*it) * v(k);
-}
-Xv %= omega_pg;
-for (int k = 0; k < p_act; ++k) {
-  int j = active_idx[k];
-  for (sp_mat::const_col_iterator it = X.begin_col(j); it != X.end_col(j); ++it)
-    result(k) += (*it) * Xv(it.row());
-}
-result += inv_sigmasq * v;
-```
-
-### [DNF-1] Propp-Wilson Missing Self-Loop Skip {#sec-dnf1}
-
-**File:** `src/BayesLogit_DualNet_FixedAdj.cpp`
-**Functions:** `proppwilson_dual_dense()` and its Gibbs fallback
-**Status: FIXED**
-
-Ising conditional log-odds $h_i = \mu + \eta_1 \sum_{j} R^{(1)}_{ij}\gamma_j
-+ \eta_2 \sum_{j} R^{(2)}_{ij}\gamma_j$ computed without $j \neq i$ guard.
-A non-zero diagonal in `R1` or `R2` corrupts $h_i$; SingleNet backends
-correctly had `if (j == i) continue`. Fix: added guard to main CFTP kernel
-and all Gibbs fallback sweeps.
-
-### [SNG-3] Cholesky Failure Corrupts `invC11` {#sec-sng3}
-
-**Files:** `src/BayesLogit_SingleNet_GGM.cpp`, `src/BayesLogit_DualNet_GGM.cpp`
-**Functions:** GGM column sweep
-**Status: FIXED**
-
-GGM column sweep for column $i$: (1) rank-1 subtract `invC11`, (2) Cholesky,
-(3) rank-1 restore. On Cholesky failure, code `continue`d without step 3,
-leaving `invC11` permanently modified. Fix: backup/restore:
-
-```{r eval=FALSE}
-arma::mat invC11_backup = invC11;
-invC11 -= (1.0 / Sigii) * (Sig12 * Sig12.t());
-if (!chol_ok) { invC11 = invC11_backup; continue; }
-```
-
-### [PGM-1] `calc_loglik` Uses Raw $\{-1,+1\}$ Response {#sec-pgm1}
-
-**Files:** `src/BayesLogit_PG_DualAdj.cpp`, `src/BayesLogit_PG_GGM_Moller.cpp`
-**Status: FIXED**
-
-Gamma MH step called `calc_loglik(y, z_prop, ...)` with $\{-1,+1\}$-coded `y`
-instead of $\{0,1\}$-coded `y01`. Logistic log-likelihood formula
-$\sum_i[y_{01,i}\eta_i - \log(1+e^{\eta_i})]$ is incorrect with $y=\pm 1$.
-R wrapper always converts, masking the bug; direct C++ calls silently wrong.
-Fix: all call sites pass `y01`.
-
-### [PGM-2] Redundant $O(p^3)$ Inversion in `PG_GGM_Moller` {#sec-pgm2}
-
-**File:** `src/BayesLogit_PG_GGM_Moller.cpp`
-**Status: FIXED** (same fix as SNG-1 — periodic adaptive reset via IMP-4)
-
-### [RMH-1] `pii_ggm` Division by Zero for $p=1$ {#sec-rmh1}
-
-**File:** `R/bvs_mh.R`, `R/bvs_pg.R`
-**Status: FIXED**
-
-```{r eval=FALSE}
-# Before: if (is.null(pii_ggm)) pii_ggm <- 4 / (p - 1)  # Inf when p = 1
-# After:  if (is.null(pii_ggm)) pii_ggm <- if (p > 1) 4 / (p - 1) else 0.5
-```
-
-### [RPG-1] Missing Dimension Validation in `bvs_pg()` {#sec-rpg1}
-
-**File:** `R/bvs_pg.R`
-**Status: FIXED**
-
-`bvs_mh()` validated `length(y) == nrow(X)`; `bvs_pg()` did not, causing
-opaque C-level crash on mismatch. Fix:
-
-```{r eval=FALSE}
-if (length(y) != n)
-  stop(sprintf("length(y) = %d must equal nrow(X) = %d.", length(y), n))
-```
-
-### [HLP-1] `estimate_glasso_adj` Returns Asymmetric Matrix {#sec-hlp1}
-
-**File:** `R/helpers.R`
-**Function:** `estimate_glasso_adj()`
-**Status: FIXED**
-
-```{r eval=FALSE}
-# Before (upper-tri only): adj[lower.tri(adj)] <- 0L
-# After (full symmetric):
-adj <- pmax(adj, t(adj))
-adj <- ifelse(adj != 0, 1L, 0L)
-diag(adj) <- 0L
-```
-
-Controlled by new parameter `symmetrize = TRUE`.
-
-### [TUN-1] `bvs_tune_eta` Forces Dense $X$ for Sparse Problems {#sec-tun1}
-
-**File:** `R/bvs_eta_tuning.R`
-**Status: FIXED**
-
-```{r eval=FALSE}
-# Before: X <- as.matrix(X)   # always dense
-# After:  if (!isTRUE(sparse)) X <- as.matrix(X)
-```
-
-## Phase 3: MCMC Mixing Improvements
-
-### [BPG-3] Data-Informed Laplace Proposal for $\beta$ Activation {#sec-bpg3}
-
-**Header:** `src/BayesLogit_BlockPG.h`
-**Location:** Gamma MH sweep, beta proposal block
-**Status: IMPLEMENTED**
-
-In the Pólya-Gamma augmented logistic model, the full conditional of $\beta_j$
-given PG latents $\boldsymbol{\omega}$ is **exactly Gaussian** [@PG2013]:
-$$\hat{\mu}_j = \frac{X_j^T\boldsymbol{\kappa}^{(-j)} + \beta_0/\sigma^2}
-{X_j^T\Omega X_j + 1/\sigma^2}, \qquad
-\hat{s}_j^2 = \frac{1}{X_j^T\Omega X_j + 1/\sigma^2}$$
-where $\boldsymbol{\kappa}^{(-j)}$ are the working residuals excluding
-predictor $j$. Using $(\hat{\mu}_j, \hat{s}_j)$ as the MH proposal for
-$\beta_j$ is therefore the optimal (zero-variance) proposal for the
-continuous component [@NottKohn2005; @HolmesHeld2006].
-The proposal ratio $\log q_{\text{fwd}} - \log q_{\text{rev}}$ is included in
-the MH log-acceptance probability. *Expected impact:* 3–10× gain in $\gamma$ ESS.
-
-### [SPH-4] Fix $n_{\text{edges}}$ Double-Count in GGM Sweep {#sec-sph4}
-
-**Header:** `src/BayesLogit_Sparse_Helpers.h`
-**Function:** `ggm_column_sweep_sparse()`
-**Status: FIXED**
-
-Wang (2012) column-wise sweep visits both $(i,j)$ and $(j,i)$; `n_edges` was
-incremented twice per undirected flip. Fix:
-
-```{r eval=FALSE}
-if (i < nbr) { if (now && !was) ++n_edges; else if (!now && was) --n_edges; }
-```
-
-*Reference:* @Wang2012.
-
-### [SPH-5] Expand Propp-Wilson Seed Space to $2^{31}-1$ {#sec-sph5}
-
-**Header:** `src/BayesLogit_Sparse_Helpers.h`
-**Functions:** `proppwilson_single_sparse()`, `proppwilson_dual_sparse()`
-**Status: FIXED**
-
-CFTP requires deterministic sub-generator seeding [@ProppWilson1996; @Fill1998].
-Original seed space = 1000; birthday paradox: 50% collision at $\sim 37$ calls.
-Fix: `seed_base = static_cast<unsigned int>(R::runif(0.0,1.0)*2147483647.0) + 1u;`
-50% collision threshold now $\sim 50{,}000$ calls.
-
-### [PSGM-5] PG Sampler Restores R's RNG Stream {#sec-psgm5}
-
-**File:** `src/BayesLogit_PG_SingleAdj_GGM_Moller.cpp`
-**Status: FIXED**
-
-`static std::mt19937 pg_rng` + `std::exponential_distribution<double> exp_dist`
-replaced with `R::rexp(1.0)`. Every exponential draw now passes through R's
-RNG interface, restoring `set.seed()` reproducibility [@RCoreRext2025].
-The Propp-Wilson `std::mt19937` (keyed by deterministic `seed_base`) is
-intentionally retained as a *deterministic* sub-generator required for CFTP correctness.
-
-## Phase 4: Numerical Stability
-
-### [NUM-1] Non-Cumulative Cholesky Jitter {#sec-num1}
-
-**Header:** `src/BayesLogit_Numerics.h`
-**Function:** `robust_chol_inplace(arma::mat& A, arma::mat& chol_upper, ...)`
-**Status: FIXED**
-
-Cumulative jitter `A.diag() += jitter; jitter *= mult` inflated the diagonal by
-$\sum_{i=0}^{k-1}\delta_0 \cdot \text{mult}^i$ after $k$ failures, altering the
-matrix structure far more than intended [@Higham2002]. Fix: absolute jitter per attempt:
-
-```{r eval=FALSE}
-arma::vec diag_backup = A.diag();
-double jitter = std::max(jitter_init, 1e-12 * dscale);
-for (int k = 0; k < max_attempts; ++k) {
-  A.diag() = diag_backup + jitter;   // absolute, not cumulative
-  if (arma::chol(chol_upper, arma::symmatu(A))) return true;
-  jitter *= jitter_mult;
-}
-A.diag() = diag_backup;  // restore if all attempts fail
-```
-
-### [HMC-1] Clamp `log_sigmasq` Inside Leapfrog Gradient {#sec-hmc1}
-
-**Header:** `src/BVS_HMC_NUTS.h`
-**Functions:** `nlp_grad_binary_joint()`, `nlp_grad_continuous_joint()`,
-`nlp_grad_tte_joint()`, `nlp_grad_count_joint()` and their `const` variants
-**Status: FIXED**
-
-Leapfrog can temporarily push `log_sigmasq > 709.78`, causing `std::exp` overflow.
-Fix: clamp before `sigmasq = std::exp(...)` in every gradient function:
-
-```{r eval=FALSE}
-log_sigmasq = std::max(-23.0, std::min(9.2, log_sigmasq));
-// sigma^2 in [exp(-23), exp(9.2)] = [~1e-10, ~1e4]
-double sigmasq = std::exp(log_sigmasq);
-```
-
-### [PSGM-3/4] Intercept, Variance, and PG-Weight Clamping {#sec-psgm34}
-
-**File:** `src/BayesLogit_PG_SingleAdj_GGM_Moller.cpp`
-**Status: FIXED**
-
-Three unbounded quantities matched to all other backends:
-
-```{r eval=FALSE}
-alpha        = std::max(-60.0, std::min(60.0, alpha));         // PSGM-3
-omega_pg(i)  = std::max(1e-8,  std::min(1e6,  omega_pg(i)));  // PSGM-4
-sigmasq      = std::max(1e-10, std::min(1e10, 1.0/gdraw));    // PSGM-4
-```
-
-## Phase 5: R Wrapper Cleanup
-
-| Fix ID | File | Change |
-|--------|------|--------|
-| RMH-2 | bvs_mh.R, bvs_pg.R | `if (is.null(beta_init)) beta_init <- init$beta_init` (individual NULL checks) |
-| RMH-3 | bvs_mh.R, bvs_pg.R | `stopifnot(niter > 0, burnin >= 0, thin >= 1)` |
-| RPG-2 | bvs_pg.R | `outcome_type = "binary"` added to return list |
-| SUM-1 | bvs_summary.R | `tau_q_probs <- c((1-cred_level)/2, 0.5, 1-(1-cred_level)/2)` |
-| SUM-2 | bvs_summary.R | `coda::mcmc(out, start=1, thin=thin_val)` with `thin_val <- object$thin %||% 1L` |
-| SUM-3 | bvs_summary.R | `coda::mcmc(ch[1:min_n, , drop=FALSE])` in `bvs_gelman_diag()` |
-| TUN-2 | bvs_eta_tuning.R | `z_dat`, `tau0`, `htau`, `tau_init` forwarded to each tuning call |
-| HLP-2 | R/helpers.R | `.prepare_adj` preserves negative-weight edges |
-
-## Performance Improvements (IMP-1 through IMP-5)
-
-### IMP-1: Logit-Transformed Proposals for $\eta$ {#sec-imp1}
-
-**Files:** `src/BayesLogit_Sparse_Helpers.h`, `src/BayesLogit_PG_SingleAdj_GGM_Moller.cpp`,
-`src/BayesLogit_DualNet_FixedAdj.cpp`, `src/BayesLogit_PG_GGM_Moller.cpp`,
-and all remaining 8 backends
-**Location:** Each backend's inline Möller MH step
-
-The map $\phi = \log[\eta/(\eta_{\text{sd}}-\eta)]$ carries
-$\eta \in (0,\eta_{\text{sd}})$ to $\mathbb{R}$, where an unconstrained
-random walk is proposed:
-$$\phi' \sim N(\phi,\; \sigma_\phi^2), \qquad
-\eta' = \frac{\eta_{\text{sd}}}{1 + e^{-\phi'}}$$
-The MH acceptance includes the log Jacobian ratio:
-$$\Delta\log J = \bigl[\log\eta' + \log(\eta_{\text{sd}}-\eta')\bigr]
-- \bigl[\log\eta + \log(\eta_{\text{sd}}-\eta)\bigr]$$
-A fixed logit-scale SD $\sigma_\phi = 0.5$ targets $\approx 40\%$ acceptance,
-close to the optimal 1-D Metropolis rate [@Roberts1997OptimalScaling].
-Supersedes issues SPH-1, SPH-3, PSGM-2. *References:* @Vihola2012; @Roberts1997OptimalScaling.
-
-### IMP-2: CFTP Non-Coalescence Rejects MH Proposal {#sec-imp2}
-
-**Header:** `src/BayesLogit_Sparse_Helpers.h`
-**Modified signatures:**
-- `bool proppwilson_single_sparse(...)`  — returns `bool coalesced`
-- `bool proppwilson_dual_sparse(...)`   — returns `bool coalesced`
-- `void moller_update_single_sparse(EtaAdapter& adapter, ...)`
-- `void moller_update_dual_sparse(EtaAdapter& a1, EtaAdapter& a2, ...)`
-- Dense backends: `bool* coalesced` out-parameter
-
-Exact auxiliary samples from the Ising model are required by the Exchange Algorithm
-[@Murray2006DoublyIntractable]. When Propp-Wilson CFTP [@ProppWilson1996]
-fails to coalesce before $T_{\max}$, the previous ad-hoc Gibbs fallback produced
-biased samples. Fix: treat non-coalescence as a proposal rejection:
-
-```{r eval=FALSE}
-if (!coalesced) {
-  Rcpp::warning("Propp-Wilson CFTP failed at T_max=%d.", T_max);
-  return;  // reject eta proposal; chain stays at current value
-}
-```
-
-### IMP-3: Cholesky Fallback for PCG Non-Convergence {#sec-imp3}
-
-**Header:** `src/BayesLogit_BlockPG.h`
-**Functions:** `pcg_sample_beta()`, `pcg_sample_beta_sparse()`
-
-Post-CG convergence check: `norm(r) / norm(b) < tol`. On failure with
-$p_{\text{act}} \leq 2000$:
-
-```{r eval=FALSE}
-if (!converged && p_act <= 2000) {
-  // Materialise P, solve exactly via Cholesky
-  arma::mat P_dense = build_precision_dense(X_act, omega_pg, inv_sigmasq);
-  arma::solve(beta_out, arma::symmatu(P_dense), b_star,
-              arma::solve_opts::likely_sympd);
-}
-```
-
-*Reference:* @NishimuraSuchard2022.
-
-### IMP-4: Dimension-Adaptive $\Sigma_{\text{ggm}}$ Reset {#sec-imp4}
-
-**Files:** `src/BayesLogit_SingleNet_GGM.cpp`, `src/BayesLogit_PG_GGM_Moller.cpp`,
-`src/BayesLogit_PG_SingleAdj_GGM_Moller.cpp`
-
-Rank-1 error grows as $O(k \cdot p \cdot \varepsilon_{\text{mach}} \cdot \kappa(\Sigma))$
-[@Higham2002; @GolubVanLoan2013]. Reset interval computed once before loop:
-
-```{r eval=FALSE}
-const int reset_freq = std::max(20, static_cast<int>(5000.0 / p));
-// p=20: every 250; p=100: every 50; p=500: every 10
-```
-
-At `iter % reset_freq == 0`:
-```{r eval=FALSE}
-Sig_ggm = arma::inv_sympd(arma::symmatu(Sig_ggm));
-Sig_ggm = arma::inv_sympd(arma::symmatu(Sig_ggm)); // double inversion restores PD
-```
-
-Amortised cost: $O(p^3/\text{reset\_freq})$ per iteration.
-*References:* @Higham2002; @GolubVanLoan2013.
-
-### IMP-5: Relaxed Conjugate-Gradient Tolerance {#sec-imp5}
-
-**Header:** `src/BayesLogit_BlockPG.h`
-**Struct:** `PCGConfig { int max_iter = 500; double tol = 1e-4; int pcg_threshold = 50; }`
-
-Tightening CG beyond $10^{-4}$ adds significant iteration cost for sub-threshold
-precision improvement; MCMC error $\propto 1/\sqrt{N_{\text{eff}}}$ dominates
-at $10^{-4}$. Saves 30–50% of CG iterations per beta sample.
-*Reference:* @NishimuraSuchard2022.
-
-## Deep Research Implementations: IMP-6, IMP-7, IMP-8
-
-See Section \@ref(sec-mcmc-improvements) for the derivation and motivation.
-Below we document the complete C++/R implementation details.
-
-### IMP-6: Zanella Locally-Balanced $\gamma$ Proposals {#sec-imp6-detail}
-
-**Header:** `src/BayesLogit_Sparse_Helpers.h`
-
-**New C++ struct:**
-`struct LBProposalDelta { int j; double log_w_fwd; double log_w_rev; double sum_w; };`
-
-**New C++ functions (8 + 1):**
-
-| Function | Purpose |
-|---------|---------|
-| `init_lb_single_scores_dense(gamma, mu, eta1, R1, p)` | Initialise weight vector $\mathbf{w}$ — single FixedAdj dense |
-| `init_lb_dual_scores_dense(gamma, mu, eta1, eta2, R1, R2, p)` | Dual FixedAdj dense |
-| `init_lb_single_scores_ggm(gamma, mu, eta1, Z_ggm, p)` | Single GGM (dynamic adj) |
-| `init_lb_dual_scores_ggm(gamma, mu, eta1, eta2, Z_ggm, R_fix, p)` | GGM+Fixed |
-| `build_lb_single_delta_dense(j, gamma, mu, eta1, R1)→LBProposalDelta` | Delta for flipping $j$ — single dense |
-| `build_lb_dual_delta_dense(j, gamma, mu, eta1, eta2, R1, R2)→LBProposalDelta` | Dual dense |
-| `build_lb_single_delta_ggm(j, gamma, mu, eta1, Z_ggm)→LBProposalDelta` | Single GGM |
-| `build_lb_dual_delta_ggm(j, gamma, mu, eta1, eta2, Z_ggm, R_fix)→LBProposalDelta` | Dual GGM |
-| `apply_lb_delta(w_scores, delta, gamma, j)` | Update $\mathbf{w}$ after accepted flip — $O(d_j)$ |
-
-**Formula:** Balancing function $g(t)=\sqrt{t}$ applied to the local
-accept ratio [@Zanella2020]:
-$$w_j = \exp\!\Bigl(0.5\cdot\mathrm{clip}_{[-60,60]}\bigl[
-(1-2\gamma_j)\bigl(\mu + \eta_1 N_j^{(1)} + \eta_2 N_j^{(2)}\bigr)\bigr]\Bigr)$$
-Coordinate $j^*$ drawn with probability $w_{j^*}/\sum_k w_k$. MH correction:
-$$\log\frac{q_{\text{rev}}}{q_{\text{fwd}}} = \log w_{j^*}' - \log w_{j^*}
-+ \log\textstyle\sum_k w_k - \log\textstyle\sum_k w_k'$$
-
-For **GGM backends**, `init_lb_*_ggm()` is called *after* every GGM column sweep
-(adjacency $Z_{\text{ggm}}$ changes each iteration). For **FixedAdj backends**,
-initialisation is done once per gamma MH sub-loop; `apply_lb_delta()` updates
-only the $O(d_j)$ neighbours of the selected $j^*$. All 12 backends accept
-`bool use_lb_gamma` as the last C++ parameter (48/48 signature check passed).
-*Reference:* @Zanella2020.
-
-### IMP-7: Vihola Robust Adaptive Metropolis for $\eta$ {#sec-imp7-detail}
-
-**Header:** `src/BayesLogit_Sparse_Helpers.h`
-
-**New C++ struct:**
-
-```{r eval=FALSE}
-struct EtaAdapter {
-  double log_sigma;   // log-scale proposal SD, clamped to [-10, 5]
-  double alpha_star;  // target acceptance rate (0.44 for 1-D)
-  double gamma_decay; // Robbins-Monro exponent (2/3)
-  int    n_adapt;     // adaptation count
-
-  explicit EtaAdapter(double init_log_sigma = std::log(0.5))
-    : log_sigma(init_log_sigma), alpha_star(0.44),
-      gamma_decay(2.0/3.0), n_adapt(0) {}
-
-  double sigma() const {
-    return std::exp(std::max(-10.0, std::min(5.0, log_sigma)));
-  }
-  void update(double alpha_n) {           // alpha_n in {0, 1}
-    double step = 0.5 * std::min(1.0,
-      std::pow(static_cast<double>(++n_adapt), -gamma_decay));
-    log_sigma += step * (alpha_n - alpha_star);
-  }
-};
-```
-
-**1-D Robbins-Monro update** [@Vihola2012; @AndrieuThoms2008]:
-$$\log\sigma_{n+1} = \log\sigma_n
-+ \tfrac{1}{2}\min(1,\, n^{-2/3})(\alpha_n - 0.44)$$
-Target $\alpha^* = 0.44$ is the optimal 1-D acceptance rate
-[@Roberts1997OptimalScaling]. Step-size clamp $\sigma \in [\exp(-10), \exp(5)]
-\approx [4.5\times10^{-5}, 148]$ prevents runaway adaptation.
-The $n^{-2/3}$ schedule satisfies the diminishing-adaptation condition
-(Theorem 2 of @Vihola2012), ensuring ergodicity of the adaptive chain.
-
-One `EtaAdapter` is declared **per $\eta$ parameter before the MCMC loop**
-in each of the 12 backends. After each Möller MH decision,
-`adapter.update(static_cast<double>(accept_flag))` is called with the
-binary indicator. Dual-network backends declare `eta1_adapter` and `eta2_adapter`
-independently.
-
-### IMP-8: Rank-Normalised $\hat{R}$ and Bulk/Tail ESS {#sec-imp8-detail}
-
-**File:** `R/bvs_summary.R`
-
-**Three new exported R functions:**
-
-```{r eval=FALSE}
-bvs_rhat(x)      # rank-normalised split-R-hat; x = vector or matrix (cols = chains)
-bvs_ess_bulk(x)  # bulk ESS on rank-normalised split chains
-bvs_ess_tail(x)  # tail ESS: min(ESS_{q=0.05}, ESS_{q=0.95})
-```
-
-**Seven new internal helpers (not exported):**
-
-| Helper | Role |
-|--------|------|
-| `.ensure_matrix(x)` | Coerce input; single vector → two-column matrix (split-chain) |
-| `.split_chains(X)` | Split each column in half, doubling chain count |
-| `.z_scale(X)` | Rank-normalise: $z_j = \Phi^{-1}[(r_j - 3/8)/(n+1/4)]$ |
-| `.fold_draws(X)` | Fold: $|x_j - \operatorname{median}(x)|$ for tail R-hat |
-| `.rhat_basic(X_split)` | Classic Gelman-Rubin $\hat{R}$ on split/normalised chains |
-| `.ess_multi_chain(X_split)` | Geyer's initial positive sequence estimator [@Geyer1992] |
-| `.ess_quantile(x, q)` | ESS of indicator chain $\mathbf{1}[x_j \leq \hat{F}^{-1}(q)]$ |
-
-**`bvs_rhat(x)` algorithm** [@Vehtari2021]:
-1. Split each chain in half → $2M$ chains of length $\lfloor N/2\rfloor$
-2. Rank-normalise combined draws: $z_j = \Phi^{-1}[(r_j-3/8)/(N_{\text{tot}}+1/4)]$
-3. $\hat{R}_{\text{bulk}}$ = Gelman-Rubin on rank-normalised split chains
-4. Fold: $\tilde{x}_j = |x_j - \operatorname{median}(x)|$; repeat steps 1–3 → $\hat{R}_{\text{tail}}$
-5. Return $\max(\hat{R}_{\text{bulk}}, \hat{R}_{\text{tail}})$
-
-**`bvs_ess_bulk(x)`:** Split-chain + rank-normalise, then Geyer's initial positive
-sequence on the lag-$k$ autocorrelation estimator [@Geyer1992].
-
-**`bvs_ess_tail(x)`:** $\min(\text{ESS}_{q=0.05}, \text{ESS}_{q=0.95})$ where
-quantile-ESS uses the indicator-function chain $\mathbf{1}[x_j \leq \hat{F}^{-1}(q)]$.
-
-If the `posterior` R package is installed, all three functions delegate to
-`posterior::rhat()`, `posterior::ess_bulk()`, `posterior::ess_tail()` [@Vehtari2021]
-for maximum numerical accuracy. `summary.bvs()` now reports both `ESS` (bulk) and
-`ESS_tail` for every predictor in the `summary_beta` data frame; convergence
-thresholds of $\hat{R} < 1.01$ and ESS $\geq 100$ per chain are recommended [@Vehtari2021].
-
-## Cumulative Change Statistics
-
-| Category | Count |
-|----------|-------|
-| C++ files modified | 15 (4 headers + 11 backends + RcppExports.cpp) |
-| R files modified | 6 |
-| New test files | 4 |
-| Total issues addressed | 45 |
-| New exported R functions | 3 (`bvs_rhat`, `bvs_ess_bulk`, `bvs_ess_tail`) |
-| New C++ structs | 2 (`EtaAdapter`, `LBProposalDelta`) |
-| New C++ helper functions | 9 (8 LB initialisers/builders + `apply_lb_delta`) |
-
-# Acknowledgments {-}
-
-The authors thank the MetaboAnalyst team for providing the publicly
-available cachexia dataset used in the real-data illustration.
-
 # References {-}
-

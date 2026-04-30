@@ -108,7 +108,8 @@ inline bool safe_mh_accept(double log_ratio) {
 }
 
 inline bool outcome_is_continuous(const std::string &outcome_type) {
-  if (outcome_type == "binary")
+  if (outcome_type == "binary" || outcome_type == "imbalanced_binary" ||
+      outcome_type == "ZIC")
     return false;
   if (outcome_type == "continuous")
     return true;
@@ -117,7 +118,8 @@ inline bool outcome_is_continuous(const std::string &outcome_type) {
   if (outcome_type == "count")
     return false;
   Rcpp::stop(
-      "outcome_type must be 'binary', 'continuous', 'TTE', or 'count'.");
+      "outcome_type must be 'binary', 'continuous', 'TTE', 'count', "
+      "'imbalanced_binary', or 'ZIC'.");
   return false;
 }
 
@@ -125,10 +127,12 @@ inline bool outcome_is_tte(const std::string &outcome_type) {
   if (outcome_type == "TTE")
     return true;
   if (outcome_type == "binary" || outcome_type == "continuous" ||
-      outcome_type == "count")
+      outcome_type == "count" || outcome_type == "imbalanced_binary" ||
+      outcome_type == "ZIC")
     return false;
   Rcpp::stop(
-      "outcome_type must be 'binary', 'continuous', 'TTE', or 'count'.");
+      "outcome_type must be 'binary', 'continuous', 'TTE', 'count', "
+      "'imbalanced_binary', or 'ZIC'.");
   return false;
 }
 
@@ -136,11 +140,21 @@ inline bool outcome_is_count(const std::string &outcome_type) {
   if (outcome_type == "count")
     return true;
   if (outcome_type == "binary" || outcome_type == "continuous" ||
-      outcome_type == "TTE")
+      outcome_type == "TTE" || outcome_type == "imbalanced_binary" ||
+      outcome_type == "ZIC")
     return false;
   Rcpp::stop(
-      "outcome_type must be 'binary', 'continuous', 'TTE', or 'count'.");
+      "outcome_type must be 'binary', 'continuous', 'TTE', 'count', "
+      "'imbalanced_binary', or 'ZIC'.");
   return false;
+}
+
+inline bool outcome_is_imbalanced_binary(const std::string &outcome_type) {
+  return outcome_type == "imbalanced_binary";
+}
+
+inline bool outcome_is_zic(const std::string &outcome_type) {
+  return outcome_type == "ZIC";
 }
 
 inline bool normalize_binary_indicator(const arma::vec &x, arma::uvec &x01) {
@@ -407,7 +421,10 @@ public:
       double shift = db * val;
 
       arma::uword g = item_to_group_[i];
-      delta_group_W[g] += W_(i) * (std::exp(shift) - 1.0);
+      // NUM-3: expm1 preserves precision for small |shift|; clamp shift
+      // to guard against overflow from large coefficient proposals.
+      double safe_shift = clamp_finite(shift, -50.0, 50.0, 0.0);
+      delta_group_W[g] += W_(i) * std::expm1(safe_shift);
 
       if (is_event_[i] > 0.0) {
         delta_event_eta_sum += shift;
@@ -440,7 +457,10 @@ public:
         continue;
 
       arma::uword g = item_to_group_[i];
-      delta_group_W[g] += W_(i) * (std::exp(shift) - 1.0);
+      // NUM-3: expm1 preserves precision for small |shift|; clamp shift
+      // to guard against overflow from large coefficient proposals.
+      double safe_shift = clamp_finite(shift, -50.0, 50.0, 0.0);
+      delta_group_W[g] += W_(i) * std::expm1(safe_shift);
 
       if (is_event_[i] > 0.0) {
         delta_event_eta_sum += shift;
@@ -471,10 +491,10 @@ public:
     for (arma::uword idx = start; idx < end; ++idx) {
       arma::uword i = row_idx[idx];
       double shift = db * xvals[idx];
-
+      // NUM-3: keep W_ in sync with (clamped) linpred_ used in propose_diff.
+      double safe_shift = clamp_finite(shift, -50.0, 50.0, 0.0);
       linpred_(i) += shift;
-      W_(i) *=
-          std::exp(shift); // equivalently W_(i) = std::exp(linpred_ - max_eta_)
+      W_(i) *= std::exp(safe_shift);
     }
 
     double current_delta_S = 0.0;
@@ -493,9 +513,10 @@ public:
       double shift = db * xj[i];
       if (shift == 0.0)
         continue;
-
+      // NUM-3: keep W_ in sync with (clamped) linpred_ used in propose_diff.
+      double safe_shift = clamp_finite(shift, -50.0, 50.0, 0.0);
       linpred_(i) += shift;
-      W_(i) *= std::exp(shift);
+      W_(i) *= std::exp(safe_shift);
     }
 
     double current_delta_S = 0.0;

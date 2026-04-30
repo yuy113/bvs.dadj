@@ -439,9 +439,10 @@ Rcpp::List BayesLogit_PG_SingleAdj(
       auto block = bvs_dadj_block::flatten_clusters(proposal);
       if (!block.empty()) {
         z = X * beta;
+        // R2-FIX: pass Z_tau so the block likelihood uses the full predictor.
         bvs_dadj_block::uncollapsed_gamma_sweep_single(
             gamma_u8, beta, z, X, y01, alpha, sigmasq, beta0, mu, eta, block,
-            neigh_fn);
+            neigh_fn, &Z_tau);
         bvs_dadj_block::uint8_to_gamma(gamma, gamma_u8);
       }
       beta.elem(arma::find(gamma == 0)).zeros();

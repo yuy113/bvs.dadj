@@ -9,7 +9,7 @@ bvs_mh(
   X,
   y,
   event = NULL,
-  outcome_type = c("binary", "continuous", "TTE", "count"),
+  outcome_type = c("binary", "continuous", "TTE", "count", "imbalanced_binary", "ZIC"),
   adj_type = c("fixed", "dual_fixed", "glasso", "glasso_fixed", "ggm", "ggm_fixed"),
   adj_fixed = NULL,
   adj_fixed2 = NULL,
@@ -55,7 +55,16 @@ bvs_mh(
   alg_type = c("MH", "HMC", "NUTS"),
   hmc_step_size = 0.1,
   hmc_n_leapfrog = 10L,
-  nuts_max_treedepth = 10L
+  nuts_max_treedepth = 10L,
+  imbalanced_link = c("logit_t", "cloglog"),
+  t_df = 1,
+  t_scale = 2.5,
+  zinb_r = 1,
+  zinb_a_pi = 1,
+  zinb_b_pi = 1,
+  zinb_a_r = 1,
+  zinb_b_r = 0.1,
+  zinb_estimate_r = FALSE
 )
 }
 \arguments{
@@ -73,10 +82,11 @@ times and must be finite and strictly positive. For
 \code{\{-1,1\}} allowed). Ignored for non-TTE outcomes.}
 
 \item{outcome_type}{Character outcome model:
-\code{"binary"} (logistic; default) or \code{"continuous"}
-(Gaussian with conjugate normal-inverse-gamma updates) or \code{"TTE"}
-(Cox partial likelihood for right-censored time-to-event outcomes) or
-\code{"count"} (negative-binomial via Poisson-Gamma augmentation).}
+\code{"binary"} (logistic; default), \code{"continuous"}
+(Gaussian with conjugate normal-inverse-gamma updates), \code{"TTE"}
+(Cox partial likelihood for right-censored time-to-event outcomes),
+\code{"count"} (negative-binomial via Poisson-Gamma augmentation), or
+\code{"imbalanced_binary"} (robust Student-t prior or cloglog link).}
 
 \item{adj_type}{Character string specifying the adjacency structure.
 One of:
@@ -147,31 +157,43 @@ backends ignore this parameter for computational efficiency.}
 \item{beta0}{Prior mean for coefficients (default 0).}
 
 \item{n_mh_gamma}{Number of gamma MH updates per MCMC iteration
-(default 3; used by GGM/sparse backends).}
+(default 3; used by GGM backends in both dense and sparse modes).
+Dense fixed/glasso backends use \code{n_thin_gb} instead.}
 
-\item{use_lb_gamma}{Logical; for sparse GGM backends, use locally-balanced
-Zanella-style coordinate proposals for gamma updates (default \code{TRUE}).
-Ignored by dense backends.}
+\item{use_lb_gamma}{Logical; use Zanella (2020) locally-balanced
+\eqn{g(t)=\sqrt{t}} coordinate proposals for gamma updates across
+\emph{all 12 backends} (default \code{TRUE}). Proposal weights are
+\eqn{w_j = \exp(0.5 \cdot \mathrm{clip}[(1-2\gamma_j)(\mu + \eta N_j)])};
+the MH ratio is corrected by the log proposal ratio.
+Set \code{FALSE} to revert to uniform-coordinate baseline.
+Reference: Zanella (2020) \emph{JASA} 115(530), 852--865.}
 
-\item{eta1_sd}{Upper bound for eta1 (single-eta models or dual models, default 0.5).}
+\item{eta1_sd}{Upper bound for eta1 (Uniform(0, eta1_sd) prior; default 0.5).}
 
-\item{eta2_sd}{Upper bound for eta2 (dual-eta models, default 0.5).}
+\item{eta2_sd}{Upper bound for eta2 (dual-eta models; Uniform(0, eta2_sd) prior; default 0.5).}
 
-\item{mu_tilde}{Auxiliary MRF external field for Moller update
-(default -4).}
+\item{mu_tilde}{Auxiliary MRF external field for Moller/Exchange update
+(default -4; set equal to mu to use the exact Exchange Algorithm).}
 
-\item{eta1_tilde}{Auxiliary eta1 coupling (default 0.5).}
+\item{eta1_tilde}{Auxiliary eta1 coupling for the Exchange Algorithm (default 0.5).}
 
-\item{eta2_tilde}{Auxiliary eta2 coupling (default 0.5).}
+\item{eta2_tilde}{Auxiliary eta2 coupling for the Exchange Algorithm (default 0.5).}
 
 \item{e_eta}{Beta prior shape \code{a} for eta (default 1).}
 
 \item{f_eta}{Beta prior shape \code{b} for eta (default 1).}
 
-\item{Tmax}{Maximum Propp-Wilson doubling time (default 64).}
+\item{Tmax}{Maximum Propp-Wilson CFTP doubling horizon (default 64).
+If CFTP does not coalesce within \code{Tmax} doublings, the eta proposal
+is rejected (preserving exactness of the chain) and a warning is issued.}
 
-\item{proposal_type}{Eta proposal kernel: 0 = uniform, 1 = truncated
-normal (default 1).}
+\item{proposal_type}{Eta proposal kernel: \code{0} = logit-transformed
+random walk (default 1 = same, kept for backward compatibility).
+Since IMP-1, both values use a logit-scale Normal random walk,
+mapping \eqn{\eta \in (0, \eta_{\mathrm{sd}})} to the real line and back
+with the Jacobian correction included in the MH ratio.
+Reference: Vihola (2012) \emph{Statistics and Computing} 22(5), 997--1008;
+Roberts, Gelman & Gilks (1997) \emph{Ann. Appl. Prob.} 7(1), 110--120.}
 
 \item{v0_ggm}{GGM SSVS spike variance (default \code{0.015^2}).}
 
@@ -218,34 +240,45 @@ NUTS adapts this automatically during burn-in.}
 
 \item{nuts_max_treedepth}{Maximum tree depth for the No-U-Turn Sampler
 (NUTS) algorithm (default 10).}
+
+\item{imbalanced_link}{Character string specifying the link function for
+\code{outcome_type = "imbalanced_binary"}: \code{"logit_t"} (logistic link
+with robust Student-t prior on beta) or \code{"cloglog"} (complementary
+log-log link with Gaussian prior on beta).}
+
+\item{t_df}{Degrees of freedom for the robust Student-t prior when using
+\code{imbalanced_link = "logit_t"} (default 1.0, Cauchy prior).}
+
+\item{t_scale}{Scale factor for the robust Student-t prior when using
+\code{imbalanced_link = "logit_t"} (default 2.5).}
 }
 \value{
 An object of class \code{"bvs"}, a named list with:
   \describe{
-    \item{beta}{Matrix of posterior beta samples (niter x p).}
-    \item{gamma}{Posterior gamma samples (dense matrix or sparse list,
-      depending on backend/storage options).}
-    \item{gamma_pip}{Posterior inclusion probabilities for gamma
-      (length p).}
-    \item{alpha}{Vector of posterior alpha (intercept) samples.}
-    \item{sigmasq}{Vector of posterior sigma^2 samples.}
-    \item{eta1}{Vector of eta1 (dynamic or single-graph coupling) samples
-      (if applicable).}
-    \item{eta2}{Vector of eta2 (fixed coupling) samples
-      (if applicable).}
-    \item{Z_list}{List of GGM adjacency snapshots (if applicable).}
-    \item{Z_pip}{Posterior edge inclusion probabilities for GGM adjacency
-      (if applicable).}
-    \item{tau}{Matrix of posterior tau (z_dat coefficient) samples
-      (niter x q), or NULL if z_dat was not supplied.}
-    \item{call}{The matched call.}
-    \item{adj_type}{The adjacency type used.}
-    \item{sampler}{Character sampler identifier:
-    \code{"mh"}, \code{"hmc"}, or \code{"nuts"}.}
-    \item{outcome_type}{Character outcome model used (\code{"binary"},
-      \code{"continuous"}, \code{"TTE"}, or \code{"count"}).}
+    \item{beta}{Matrix of posterior beta samples (\code{niter x p}), or sparse
+      list when \code{store_beta = FALSE} in sparse backends.}
+    \item{gamma}{Posterior gamma samples (\code{niter x p} matrix or sparse
+      index list, depending on backend and storage options).}
+    \item{gamma_pip}{Posterior inclusion probabilities (length \code{p}), or
+      \code{NULL} when not recoverable.}
+    \item{alpha}{Numeric vector of posterior intercept samples (length \code{niter}).}
+    \item{sigmasq}{Numeric vector of posterior \eqn{\sigma^2} samples.}
+    \item{eta1}{Numeric vector of eta1 coupling parameter samples.}
+    \item{eta2}{Numeric vector of eta2 coupling samples (dual-network models only).}
+    \item{Z_list}{List of GGM adjacency snapshots (\code{store_Z_list = TRUE} only).}
+    \item{Z_pip}{Sparse matrix of GGM edge posterior inclusion probabilities
+      (\code{store_Z_pip = TRUE} and GGM \code{adj_type} only).}
+    \item{tau}{Matrix of posterior tau samples (\code{niter x q}), or
+      \code{NULL} if \code{z_dat} was not supplied.}
+    \item{call}{The matched function call.}
+    \item{adj_type}{Character adjacency type used.}
+    \item{sampler}{Character sampler identifier: \code{"mh"}, \code{"hmc"},
+      or \code{"nuts"}.}
+    \item{outcome_type}{Character outcome model: \code{"binary"},
+      \code{"continuous"}, \code{"TTE"}, or \code{"count"}.}
     \item{niter}{Number of stored post-burn-in iterations.}
     \item{burnin}{Number of burn-in iterations discarded.}
+    \item{thin}{Thinning interval used.}
     \item{p}{Number of predictors in \code{X}.}
     \item{ntau}{Number of always-included covariates in \code{z_dat}.}
     \item{n}{Number of observations.}
@@ -342,6 +375,31 @@ fit5 <- bvs_mh(
 )
 }
 
+}
+\references{
+Moller J, Pettitt AN, Reeves R, Berthelsen KK (2006). An efficient MCMC
+  method for distributions with intractable normalising constants.
+  \emph{Biometrika} 93(2), 451--458.
+
+  Polson NG, Scott JG, Windle J (2013). Bayesian inference for logistic
+  models using Polya-Gamma latent variables. \emph{JASA} 108(504),
+  1339--1349.
+
+  Hoffman MD, Gelman A (2014). The No-U-Turn sampler. \emph{JMLR} 15,
+  1593--1623.
+
+  Wang H (2012). Bayesian graphical lasso models and efficient posterior
+  computation. \emph{Bayesian Analysis} 7(4), 867--886.
+
+  Zanella G (2020). Informed proposals for local MCMC in discrete spaces.
+  \emph{JASA} 115(530), 852--865.
+
+  Vihola M (2012). Robust adaptive Metropolis algorithm with coerced
+  acceptance rate. \emph{Statistics and Computing} 22(5), 997--1008.
+
+  Vehtari A, Gelman A, Simpson D, Carpenter B, Burkner P-C (2021).
+  Rank-normalization, folding, and localization: An improved R-hat for
+  assessing convergence of MCMC. \emph{Bayesian Analysis} 16(2), 667--718.
 }
 \seealso{
 \code{\link{bvs_pg}}, \code{\link{summary.bvs}},

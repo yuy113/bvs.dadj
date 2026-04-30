@@ -745,16 +745,22 @@ inline double loglik_obs_stable(double yi, double psi) {
 }
 
 // Compute log-likelihood difference when changing X.col(j) contribution by db
-// Dense version
+// Dense version. R2-FIX: optional z_offset (Z_dat * tau) added to the linear
+// predictor so the likelihood used for the MH ratio matches the model when
+// the user supplies Z_dat covariates.
 inline double dense_column_ll_diff(const arma::vec &y, const arma::vec &Xb,
                                     double alpha_val, const arma::mat &X, int j,
-                                    double db) {
+                                    double db,
+                                    const arma::vec *z_offset = nullptr) {
   if (std::abs(db) < 1e-16)
     return 0.0;
   int n = static_cast<int>(y.n_elem);
+  const bool has_off = (z_offset != nullptr) &&
+                       (static_cast<int>(z_offset->n_elem) == n);
   double diff = 0.0;
   for (int i = 0; i < n; ++i) {
-    double psi_old = alpha_val + Xb(i);
+    double off = has_off ? (*z_offset)(i) : 0.0;
+    double psi_old = alpha_val + Xb(i) + off;
     double psi_new = psi_old + db * X(i, j);
     diff += loglik_obs_stable(y(i), psi_new) - loglik_obs_stable(y(i), psi_old);
   }
@@ -769,11 +775,15 @@ inline void uncollapsed_gamma_sweep_single(
     std::vector<uint8_t> &gamma, arma::vec &beta, arma::vec &Xb,
     const arma::mat &X, const arma::vec &y, double alpha_val, double sigmasq,
     double beta0, double mu, double eta,
-    const std::vector<int> &block_indices, NeighborFn for_each_neighbor) {
+    const std::vector<int> &block_indices, NeighborFn for_each_neighbor,
+    const arma::vec *z_offset = nullptr) {  // R2-FIX: optional Z*tau offset
 
   double sd_beta = std::sqrt(sigmasq);
   if (!std::isfinite(sd_beta) || sd_beta <= 0.0)
     sd_beta = 1.0;
+  const arma::uword n_obs = X.n_rows;
+  const bool has_off = (z_offset != nullptr) &&
+                       (z_offset->n_elem == n_obs);
   for (int j : block_indices) {
     int g_curr = static_cast<int>(gamma[j]);
     double b_curr = beta(j);
@@ -786,16 +796,12 @@ inline void uncollapsed_gamma_sweep_single(
     double log_prior_odds = mu + eta * neigh_sum;
 
     if (g_curr == 0) {
-      // BPG-3: Data-informed activation proposal via 1-step Laplace approx.
-      // Instead of prior proposal N(beta0, sigmasq), use approximate posterior
-      // mode as proposal center. This dramatically improves acceptance for
-      // variables with large true effects.
       double inv_sigmasq = 1.0 / std::max(sigmasq, 1e-10);
-      const arma::uword n = X.n_rows;
       double xj_w_xj = 0.0;
       double xj_resid = 0.0;
-      for (arma::uword i = 0; i < n; ++i) {
-        double psi = alpha_val + Xb(i);
+      for (arma::uword i = 0; i < n_obs; ++i) {
+        double off = has_off ? (*z_offset)(i) : 0.0;
+        double psi = alpha_val + Xb(i) + off;
         psi = bvs_dadj::clamp_finite(psi, -30.0, 30.0, 0.0);
         double pi_i = 1.0 / (1.0 + std::exp(-psi));
         double wi = pi_i * (1.0 - pi_i);
@@ -808,14 +814,9 @@ inline void uncollapsed_gamma_sweep_single(
       double b_prop = R::rnorm(mean_j, sd_j);
       b_prop = bvs_dadj::clamp_finite(b_prop, -30.0, 30.0, 0.0);
       double db = b_prop;
-      double ll_diff = dense_column_ll_diff(y, Xb, alpha_val, X, j, db);
-      // MH correction: subtract proposal ratio
-      // q(b_prop | 0->1) = dnorm(b_prop, mean_j, sd_j)
-      // q(0 | 1->0) = 1 (deterministic)
-      // Forward: log q(b_prop) for activation
+      double ll_diff = dense_column_ll_diff(y, Xb, alpha_val, X, j, db, z_offset);
       double log_q_fwd = -0.5 * std::log(2.0 * M_PI) - std::log(sd_j) -
                           0.5 * (b_prop - mean_j) * (b_prop - mean_j) / (sd_j * sd_j);
-      // Prior: log p(b_prop) = log N(b_prop | beta0, sigmasq)
       double log_prior_b = -0.5 * std::log(2.0 * M_PI * sigmasq) -
                             0.5 * (b_prop - beta0) * (b_prop - beta0) / sigmasq;
       double log_ratio = ll_diff + log_prior_odds + log_prior_b - log_q_fwd;
@@ -823,18 +824,16 @@ inline void uncollapsed_gamma_sweep_single(
       if (bvs_dadj::safe_mh_accept(log_ratio)) {
         gamma[j] = 1;
         beta(j) = b_prop;
-        for (arma::uword i = 0; i < n; ++i)
+        for (arma::uword i = 0; i < n_obs; ++i)
           Xb(i) += db * X(i, j);
       }
     } else {
-      // Propose deactivation: set beta_j = 0
-      // Reverse proposal ratio: q(b_curr | 0->1) from Laplace approx at b_curr
       double inv_sigmasq = 1.0 / std::max(sigmasq, 1e-10);
-      const arma::uword n = X.n_rows;
       double xj_w_xj = 0.0;
       double xj_resid = 0.0;
-      for (arma::uword i = 0; i < n; ++i) {
-        double psi = alpha_val + Xb(i) - b_curr * X(i, j);
+      for (arma::uword i = 0; i < n_obs; ++i) {
+        double off = has_off ? (*z_offset)(i) : 0.0;
+        double psi = alpha_val + Xb(i) - b_curr * X(i, j) + off;
         psi = bvs_dadj::clamp_finite(psi, -30.0, 30.0, 0.0);
         double pi_i = 1.0 / (1.0 + std::exp(-psi));
         double wi = pi_i * (1.0 - pi_i);
@@ -845,7 +844,7 @@ inline void uncollapsed_gamma_sweep_single(
       double mean_j = (xj_resid + beta0 * inv_sigmasq) / prec_j;
       double sd_j = 1.0 / std::sqrt(std::max(prec_j, 1e-12));
       double db = 0.0 - b_curr;
-      double ll_diff = dense_column_ll_diff(y, Xb, alpha_val, X, j, db);
+      double ll_diff = dense_column_ll_diff(y, Xb, alpha_val, X, j, db, z_offset);
       double log_q_rev = -0.5 * std::log(2.0 * M_PI) - std::log(sd_j) -
                           0.5 * (b_curr - mean_j) * (b_curr - mean_j) / (sd_j * sd_j);
       double log_prior_b = -0.5 * std::log(2.0 * M_PI * sigmasq) -
@@ -855,7 +854,7 @@ inline void uncollapsed_gamma_sweep_single(
       if (bvs_dadj::safe_mh_accept(log_ratio)) {
         gamma[j] = 0;
         beta(j) = 0.0;
-        for (arma::uword i = 0; i < n; ++i)
+        for (arma::uword i = 0; i < n_obs; ++i)
           Xb(i) += db * X(i, j);
       }
     }
@@ -869,11 +868,15 @@ inline void uncollapsed_gamma_sweep_dual(
     const arma::mat &X, const arma::vec &y, double alpha_val, double sigmasq,
     double beta0, double mu, double eta1, double eta2,
     const std::vector<int> &block_indices, NeighborFn1 for_each_neighbor1,
-    NeighborFn2 for_each_neighbor2) {
+    NeighborFn2 for_each_neighbor2,
+    const arma::vec *z_offset = nullptr) {  // R2-FIX: optional Z*tau offset
 
   double sd_beta = std::sqrt(sigmasq);
   if (!std::isfinite(sd_beta) || sd_beta <= 0.0)
     sd_beta = 1.0;
+
+  const arma::uword n = X.n_rows;
+  const bool has_off = (z_offset != nullptr) && (z_offset->n_elem == n);
 
   for (int j : block_indices) {
     int g_curr = static_cast<int>(gamma[j]);
@@ -888,10 +891,10 @@ inline void uncollapsed_gamma_sweep_dual(
     if (g_curr == 0) {
       // BPG-3: Data-informed activation proposal (dual adjacency)
       double inv_sigmasq = 1.0 / std::max(sigmasq, 1e-10);
-      const arma::uword n = X.n_rows;
       double xj_w_xj = 0.0, xj_resid = 0.0;
       for (arma::uword i = 0; i < n; ++i) {
-        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i), -30.0, 30.0, 0.0);
+        double off = has_off ? (*z_offset)(i) : 0.0;
+        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i) + off, -30.0, 30.0, 0.0);
         double pi_i = 1.0 / (1.0 + std::exp(-psi));
         double wi = pi_i * (1.0 - pi_i);
         xj_w_xj += X(i, j) * X(i, j) * wi;
@@ -903,7 +906,7 @@ inline void uncollapsed_gamma_sweep_dual(
       double b_prop = R::rnorm(mean_j, sd_j);
       b_prop = bvs_dadj::clamp_finite(b_prop, -30.0, 30.0, 0.0);
       double db = b_prop;
-      double ll_diff = dense_column_ll_diff(y, Xb, alpha_val, X, j, db);
+      double ll_diff = dense_column_ll_diff(y, Xb, alpha_val, X, j, db, z_offset);
       double log_q_fwd = -0.5 * std::log(2.0 * M_PI) - std::log(sd_j) -
                           0.5 * (b_prop - mean_j) * (b_prop - mean_j) / (sd_j * sd_j);
       double log_prior_b = -0.5 * std::log(2.0 * M_PI * sigmasq) -
@@ -919,10 +922,10 @@ inline void uncollapsed_gamma_sweep_dual(
     } else {
       // BPG-3: Deactivation with reverse proposal correction
       double inv_sigmasq = 1.0 / std::max(sigmasq, 1e-10);
-      const arma::uword n = X.n_rows;
       double xj_w_xj = 0.0, xj_resid = 0.0;
       for (arma::uword i = 0; i < n; ++i) {
-        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i) - b_curr * X(i, j), -30.0, 30.0, 0.0);
+        double off = has_off ? (*z_offset)(i) : 0.0;
+        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i) - b_curr * X(i, j) + off, -30.0, 30.0, 0.0);
         double pi_i = 1.0 / (1.0 + std::exp(-psi));
         double wi = pi_i * (1.0 - pi_i);
         xj_w_xj += X(i, j) * X(i, j) * wi;
@@ -932,7 +935,7 @@ inline void uncollapsed_gamma_sweep_dual(
       double mean_j = (xj_resid + beta0 * inv_sigmasq) / prec_j;
       double sd_j = 1.0 / std::sqrt(std::max(prec_j, 1e-12));
       double db = -b_curr;
-      double ll_diff = dense_column_ll_diff(y, Xb, alpha_val, X, j, db);
+      double ll_diff = dense_column_ll_diff(y, Xb, alpha_val, X, j, db, z_offset);
       double log_q_rev = -0.5 * std::log(2.0 * M_PI) - std::log(sd_j) -
                           0.5 * (b_curr - mean_j) * (b_curr - mean_j) / (sd_j * sd_j);
       double log_prior_b = -0.5 * std::log(2.0 * M_PI * sigmasq) -
@@ -956,7 +959,8 @@ inline void uncollapsed_gamma_sweep_single_sparse(
     std::vector<uint8_t> &gamma, arma::vec &beta, arma::vec &Xb,
     const arma::sp_mat &X, const arma::vec &y, double alpha_val,
     double sigmasq, double beta0, double mu, double eta,
-    const std::vector<int> &block_indices, NeighborFn for_each_neighbor) {
+    const std::vector<int> &block_indices, NeighborFn for_each_neighbor,
+    const arma::vec *z_offset = nullptr) {  // R2-FIX: optional Z*tau offset
 
   double sd_beta = std::sqrt(sigmasq);
   if (!std::isfinite(sd_beta) || sd_beta <= 0.0)
@@ -965,6 +969,8 @@ inline void uncollapsed_gamma_sweep_single_sparse(
   const arma::uword *col_ptr = X.col_ptrs;
   const arma::uword *row_idx = X.row_indices;
   const double *xvals = X.values;
+  const arma::uword n_obs = X.n_rows;
+  const bool has_off = (z_offset != nullptr) && (z_offset->n_elem == n_obs);
 
   for (int j : block_indices) {
     int g_curr = static_cast<int>(gamma[j]);
@@ -982,7 +988,8 @@ inline void uncollapsed_gamma_sweep_single_sparse(
       for (arma::uword idx = start; idx < end; ++idx) {
         int i = static_cast<int>(row_idx[idx]);
         double xij = xvals[idx];
-        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i), -30.0, 30.0, 0.0);
+        double off = has_off ? (*z_offset)(i) : 0.0;
+        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i) + off, -30.0, 30.0, 0.0);
         double pi_i = 1.0 / (1.0 + std::exp(-psi));
         xj_w_xj += xij * xij * pi_i * (1.0 - pi_i);
         xj_resid += xij * (y(i) - pi_i);
@@ -998,7 +1005,8 @@ inline void uncollapsed_gamma_sweep_single_sparse(
       for (arma::uword idx = start; idx < end; ++idx) {
         int i = static_cast<int>(row_idx[idx]);
         double xij = xvals[idx];
-        double psi_old = alpha_val + Xb(i);
+        double off = has_off ? (*z_offset)(i) : 0.0;
+        double psi_old = alpha_val + Xb(i) + off;
         double psi_new = psi_old + db * xij;
         ll_diff += loglik_obs_stable(y(i), psi_new) - loglik_obs_stable(y(i), psi_old);
       }
@@ -1021,7 +1029,8 @@ inline void uncollapsed_gamma_sweep_single_sparse(
       for (arma::uword idx = start; idx < end; ++idx) {
         int i = static_cast<int>(row_idx[idx]);
         double xij = xvals[idx];
-        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i) - b_curr * xij, -30.0, 30.0, 0.0);
+        double off = has_off ? (*z_offset)(i) : 0.0;
+        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i) - b_curr * xij + off, -30.0, 30.0, 0.0);
         double pi_i = 1.0 / (1.0 + std::exp(-psi));
         xj_w_xj += xij * xij * pi_i * (1.0 - pi_i);
         xj_resid += xij * (y(i) - pi_i);
@@ -1035,7 +1044,8 @@ inline void uncollapsed_gamma_sweep_single_sparse(
       for (arma::uword idx = start; idx < end; ++idx) {
         int i = static_cast<int>(row_idx[idx]);
         double xij = xvals[idx];
-        double psi_old = alpha_val + Xb(i);
+        double off = has_off ? (*z_offset)(i) : 0.0;
+        double psi_old = alpha_val + Xb(i) + off;
         double psi_new = psi_old + db * xij;
         ll_diff += loglik_obs_stable(y(i), psi_new) - loglik_obs_stable(y(i), psi_old);
       }
@@ -1061,7 +1071,8 @@ inline void uncollapsed_gamma_sweep_dual_sparse(
     const arma::sp_mat &X, const arma::vec &y, double alpha_val,
     double sigmasq, double beta0, double mu, double eta1, double eta2,
     const std::vector<int> &block_indices, NeighborFn1 for_each_neighbor1,
-    NeighborFn2 for_each_neighbor2) {
+    NeighborFn2 for_each_neighbor2,
+    const arma::vec *z_offset = nullptr) {  // R2-FIX: optional Z*tau offset
 
   double sd_beta = std::sqrt(sigmasq);
   if (!std::isfinite(sd_beta) || sd_beta <= 0.0)
@@ -1070,6 +1081,8 @@ inline void uncollapsed_gamma_sweep_dual_sparse(
   const arma::uword *col_ptr = X.col_ptrs;
   const arma::uword *row_idx = X.row_indices;
   const double *xvals = X.values;
+  const arma::uword n_obs = X.n_rows;
+  const bool has_off = (z_offset != nullptr) && (z_offset->n_elem == n_obs);
 
   for (int j : block_indices) {
     int g_curr = static_cast<int>(gamma[j]);
@@ -1088,7 +1101,8 @@ inline void uncollapsed_gamma_sweep_dual_sparse(
       for (arma::uword idx = start; idx < end; ++idx) {
         int i = static_cast<int>(row_idx[idx]);
         double xij = xvals[idx];
-        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i), -30.0, 30.0, 0.0);
+        double off = has_off ? (*z_offset)(i) : 0.0;
+        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i) + off, -30.0, 30.0, 0.0);
         double pi_i = 1.0 / (1.0 + std::exp(-psi));
         xj_w_xj += xij * xij * pi_i * (1.0 - pi_i);
         xj_resid += xij * (y(i) - pi_i);
@@ -1104,7 +1118,8 @@ inline void uncollapsed_gamma_sweep_dual_sparse(
       for (arma::uword idx = start; idx < end; ++idx) {
         int i = static_cast<int>(row_idx[idx]);
         double xij = xvals[idx];
-        double psi_old = alpha_val + Xb(i);
+        double off = has_off ? (*z_offset)(i) : 0.0;
+        double psi_old = alpha_val + Xb(i) + off;
         ll_diff += loglik_obs_stable(y(i), psi_old + db * xij) - loglik_obs_stable(y(i), psi_old);
       }
       double log_q_fwd = -0.5 * std::log(2.0 * M_PI) - std::log(sd_j) -
@@ -1125,7 +1140,8 @@ inline void uncollapsed_gamma_sweep_dual_sparse(
       for (arma::uword idx = start; idx < end; ++idx) {
         int i = static_cast<int>(row_idx[idx]);
         double xij = xvals[idx];
-        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i) - b_curr * xij, -30.0, 30.0, 0.0);
+        double off = has_off ? (*z_offset)(i) : 0.0;
+        double psi = bvs_dadj::clamp_finite(alpha_val + Xb(i) - b_curr * xij + off, -30.0, 30.0, 0.0);
         double pi_i = 1.0 / (1.0 + std::exp(-psi));
         xj_w_xj += xij * xij * pi_i * (1.0 - pi_i);
         xj_resid += xij * (y(i) - pi_i);
@@ -1139,7 +1155,8 @@ inline void uncollapsed_gamma_sweep_dual_sparse(
       for (arma::uword idx = start; idx < end; ++idx) {
         int i = static_cast<int>(row_idx[idx]);
         double xij = xvals[idx];
-        double psi_old = alpha_val + Xb(i);
+        double off = has_off ? (*z_offset)(i) : 0.0;
+        double psi_old = alpha_val + Xb(i) + off;
         ll_diff += loglik_obs_stable(y(i), psi_old + db * xij) - loglik_obs_stable(y(i), psi_old);
       }
       double log_q_rev = -0.5 * std::log(2.0 * M_PI) - std::log(sd_j) -

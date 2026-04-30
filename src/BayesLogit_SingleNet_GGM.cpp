@@ -1,6 +1,7 @@
 // [[Rcpp::depends(RcppArmadillo)]]
 #include "BVS_HMC_NUTS.h"
 #include "BayesLogit_Numerics.h"
+#include "BayesLogit_ZINB.h"
 #include "BayesLogit_Sparse_Helpers.h"
 #include <RcppArmadillo.h>
 #include <algorithm>
@@ -101,6 +102,45 @@ static inline double calc_loglik_continuous(const arma::vec &y,
 // normal_pdf, approx_erf, normal_cdf, log_beta_pdf provided by BayesLogit_Sparse_Helpers.h
 
 // =============================================================================
+// GIBBS SAMPLING FOR AUXILIARY OMEGA (Single Adjacency)
+// Default method (use_cftp=false): 20 full Gibbs sweeps from random init.
+// OPT: accepts uint8 Z_ggm directly — no R_dyn_int copy needed
+// OPT: precomputes sparse neighbor lists from Z to avoid O(p^2) inner loops
+// =============================================================================
+static Rcpp::IntegerVector gibbs_omega(const arma::Mat<uint8_t> &Z,
+                                       double mu, double eta1,
+                                       int n_gibbs_sweeps = 20) {
+  const unsigned int p = Z.n_cols;
+
+  // Precompute sparse neighbor lists from dense Z (built once per call)
+  std::vector<std::vector<unsigned int>> nbr(p);
+  for (unsigned int k = 0; k < p; ++k) {
+    for (unsigned int j = 0; j < p; ++j) {
+      if (j != k && Z(k, j) != 0) nbr[k].push_back(j);
+    }
+  }
+
+  Rcpp::IntegerVector x(p, 0);
+  int seed_val = static_cast<int>(std::floor(R::runif(0.0, 1.0) * 2147483646.0)) + 1;
+  std::mt19937 gf(seed_val);
+  std::uniform_real_distribution<double> u01(0.0, 1.0);
+  double base_prob = 1.0 / (1.0 + std::exp(-mu));
+  for (unsigned int k = 0; k < p; ++k) {
+    x[k] = (u01(gf) < base_prob) ? 1 : 0;
+  }
+  for (int sw = 0; sw < n_gibbs_sweeps; ++sw) {
+    for (unsigned int k = 0; k < p; ++k) {
+      double ker = 0.0;
+      for (unsigned int j : nbr[k]) {
+        ker += eta1 * x[j];
+      }
+      x[k] = (u01(gf) < 1.0 / (1.0 + std::exp(-(mu + ker)))) ? 1 : 0;
+    }
+  }
+  return x;
+}
+
+// =============================================================================
 // PROPP-WILSON PERFECT SIMULATION (Single Adjacency)
 // OPT: accepts uint8 Z_ggm directly — no R_dyn_int copy needed
 // OPT: skips j==i in kernel (diagonal is always 0)
@@ -190,7 +230,8 @@ static void moller_update_eta(const arma::Mat<uint8_t> &Z, double mu,
                               double &eta1, double eta1_sd, double mu_tilde,
                               double eta1_tilde, const arma::uvec &gamma,
                               double e_eta, double f_eta, unsigned int T_max,
-                              int proposal_type, EtaAdapter &adapter1) {
+                              int proposal_type, EtaAdapter &adapter1,
+                              bool use_cftp = false) {
   // Exactly cancel the Moller effect to implement the Exchange Algorithm
   mu_tilde = mu;
   eta1_tilde = eta1;
@@ -208,13 +249,19 @@ static void moller_update_eta(const arma::Mat<uint8_t> &Z, double mu,
   log_prop_ratio_eta1 = std::log(eta1_new) + std::log(eta1_sd - eta1_new)
                       - std::log(eta1_safe) - std::log(eta1_sd - eta1_safe);
 
-  // Generate auxiliary variables via Propp-Wilson (uses Z_ggm directly)
-  // IMP-2: Track CFTP coalescence; reject proposal if any call fails.
-  bool c1 = true, c2 = true;
-  Rcpp::IntegerVector omega_eta1 = proppwilson_omega(Z, mu, eta1, T_max, &c1);
-  Rcpp::IntegerVector omega_eta1_new =
-      proppwilson_omega(Z, mu, eta1_new, T_max, &c2);
-  if (!c1 || !c2) { adapter1.update(0.0); return; } // Reject: preserve chain exactness
+  // Generate auxiliary variables for Exchange Algorithm
+  Rcpp::IntegerVector omega_eta1, omega_eta1_new;
+  if (use_cftp) {
+    // CFTP (Propp-Wilson) with Gibbs fallback — optional
+    bool c1 = true, c2 = true;
+    omega_eta1 = proppwilson_omega(Z, mu, eta1, T_max, &c1);
+    omega_eta1_new = proppwilson_omega(Z, mu, eta1_new, T_max, &c2);
+    if (!c1 || !c2) { adapter1.update(0.0); return; } // Reject: preserve chain exactness
+  } else {
+    // Standard Gibbs sampling (default) — no CFTP overhead
+    omega_eta1 = gibbs_omega(Z, mu, eta1, 20);
+    omega_eta1_new = gibbs_omega(Z, mu, eta1_new, 20);
+  }
 
   // Compute sufficient statistics
   double B_R1 = 0.0;
@@ -275,11 +322,23 @@ Rcpp::List BayesLogit_SingleNet_GGM(
     std::string outcome_type = "binary", bool store_gamma = true,
     std::string alg_type = "MH", double hmc_step_size = 0.1,
     int hmc_n_leapfrog = 10, int nuts_max_treedepth = 10,
-    bool use_lb_gamma = true) {
+    bool use_lb_gamma = true,
+    std::string imbalanced_link = "logit_t",
+    double t_df = 1.0, double t_scale = 2.5,
+    double zinb_r = 1.0, double zinb_a_pi = 1.0, double zinb_b_pi = 1.0,
+    double zinb_a_r = 1.0, double zinb_b_r = 0.1,
+    bool zinb_estimate_r = false,
+    bool use_cftp = false) {
   Rcpp::RNGScope scope;
   const bool is_continuous = bvs_dadj::outcome_is_continuous(outcome_type);
   const bool is_tte = bvs_dadj::outcome_is_tte(outcome_type);
   const bool is_count = bvs_dadj::outcome_is_count(outcome_type);
+  const bool is_imbalanced = bvs_dadj::outcome_is_imbalanced_binary(outcome_type);
+  const bool is_zic = bvs_dadj::outcome_is_zic(outcome_type);
+  const int imb_link_code = is_imbalanced ?
+      bvs_imbalanced::parse_imbalanced_link(imbalanced_link) : -1;
+  const bool use_cloglog = (imb_link_code == 1);
+  const bool use_t_prior = is_imbalanced && (imb_link_code == 0);
 
   const arma::uword n = X.n_rows;
   const arma::uword p = X.n_cols;
@@ -315,6 +374,11 @@ Rcpp::List BayesLogit_SingleNet_GGM(
       Rcpp::stop(
           "For outcome_type='count', y must be non-negative integer counts.");
     }
+  } else if (is_zic) {
+    if (!bvs_dadj::normalize_count_response(y, y_count)) {
+      Rcpp::stop(
+          "For outcome_type='ZIC', y must be non-negative integer counts.");
+    }
   }
 
   // 1. INITIALIZATION
@@ -327,7 +391,7 @@ Rcpp::List BayesLogit_SingleNet_GGM(
 
   double alpha = alpha_in;
   double sigmasq = 1.0;
-  double eta1 = 0.01;
+  double eta1 = eta1_sd * 0.5; // start at midpoint of support
   if (is_tte)
     alpha = 0.0; // not identifiable under Cox partial likelihood
   const double nb_shape = 1.0;
@@ -347,12 +411,23 @@ Rcpp::List BayesLogit_SingleNet_GGM(
   bvs_dadj::CoxTracker cox_tracker;
   arma::vec w_count;
   arma::vec log_w_count;
-  if (is_count) {
+  if (is_count || is_zic) {
     w_count.set_size(n);
     log_w_count.set_size(n);
     w_count.fill(1.0);
     log_w_count.zeros();
   }
+  // ZINB state variables
+  double zinb_r_curr = zinb_r;
+  double zinb_pi_curr = 0.1;
+  arma::uvec zinb_Z_latent;
+  if (is_zic) {
+    zinb_Z_latent.set_size(n);
+    zinb_Z_latent.zeros();  // all start as at-risk
+  }
+
+  // Latent scale-mixture variables for Student-t / Cauchy prior (Approach A)
+  arma::vec lambda_t(p, arma::fill::ones);
 
   auto refresh_count_latent = [&](const arma::vec &xb_total_curr,
                                   double alpha_curr) {
@@ -375,10 +450,24 @@ Rcpp::List BayesLogit_SingleNet_GGM(
   } else if (is_tte) {
     cox_tracker.init(Xb_total, cox_data);
     loglik = cox_tracker.get_loglik();
+  } else if (is_zic) {
+    bvs_zinb::gibbs_update_Z(zinb_Z_latent, y_count, Xb_total, alpha,
+                             zinb_r_curr, zinb_pi_curr, n);
+    zinb_pi_curr = bvs_zinb::gibbs_update_pi(zinb_Z_latent, n, zinb_a_pi, zinb_b_pi);
+    if (zinb_estimate_r)
+      zinb_r_curr = bvs_zinb::mh_update_r(zinb_r_curr, y_count, Xb_total, alpha,
+                                           zinb_Z_latent, n, zinb_a_r, zinb_b_r);
+    bvs_zinb::refresh_zic_poisson_gamma(w_count, log_w_count, y_count,
+                                        Xb_total, alpha, zinb_r_curr,
+                                        zinb_Z_latent, n);
+    loglik = bvs_zinb::calc_loglik_zic_conditional(
+        y_count, Xb_total - Z_tau, alpha, Z_tau, log_w_count, zinb_Z_latent, n);
   } else if (is_count) {
     refresh_count_latent(Xb_total, alpha);
     loglik =
         calc_loglik_count(y_count, Xb_total - Z_tau, alpha, Z_tau, log_w_count);
+  } else if (use_cloglog) {
+    loglik = bvs_imbalanced::calc_loglik_cloglog_full(y, Xb_total, alpha);
   } else {
     loglik = calc_loglik_binary(y, Xb_total - Z_tau, alpha, Z_tau);
   }
@@ -423,7 +512,8 @@ Rcpp::List BayesLogit_SingleNet_GGM(
   arma::vec proposal_weights(p);
 
   // --- Locally-balanced gamma proposal state (Zanella 2020) ---
-  Rcpp::IntegerMatrix Z_ggm_int(p, p);  // dense snapshot for LB helpers
+  // R2-FIX: removed unused Rcpp::IntegerMatrix Z_ggm_int(p, p) snapshot;
+  // the LB helpers now accept Z_ggm (uint8) directly so no copy is needed.
   std::vector<double> lb_score, lb_weight;
   double lb_Z = 0.0;
   LBProposalDelta lb_delta;
@@ -491,7 +581,19 @@ Rcpp::List BayesLogit_SingleNet_GGM(
                   << "\n";
     }
 
-    if (is_count) {
+    if (is_zic) {
+      bvs_zinb::gibbs_update_Z(zinb_Z_latent, y_count, Xb_total, alpha,
+                               zinb_r_curr, zinb_pi_curr, n);
+      zinb_pi_curr = bvs_zinb::gibbs_update_pi(zinb_Z_latent, n, zinb_a_pi, zinb_b_pi);
+      if (zinb_estimate_r)
+        zinb_r_curr = bvs_zinb::mh_update_r(zinb_r_curr, y_count, Xb_total, alpha,
+                                             zinb_Z_latent, n, zinb_a_r, zinb_b_r);
+      bvs_zinb::refresh_zic_poisson_gamma(w_count, log_w_count, y_count,
+                                          Xb_total, alpha, zinb_r_curr,
+                                          zinb_Z_latent, n);
+      loglik = bvs_zinb::calc_loglik_zic_conditional(
+          y_count, Xb_total - Z_tau, alpha, Z_tau, log_w_count, zinb_Z_latent, n);
+    } else if (is_count) {
       refresh_count_latent(Xb_total, alpha);
       loglik = calc_loglik_count(y_count, Xb_total - Z_tau, alpha, Z_tau,
                                  log_w_count);
@@ -602,13 +704,13 @@ Rcpp::List BayesLogit_SingleNet_GGM(
     // ---------------------------------------------------------
 
     // Re-initialize LB scores after GGM sweep (Z_ggm changed)
+    // R2-FIX: avoid the O(p^2) Z_ggm -> Z_ggm_int copy each iteration by
+    // calling the uint8 overload of init_lb_single_scores_ggm directly on
+    // Z_ggm. For p=1000 this saves ~1M assignments per iteration.
     if (use_lb_gamma) {
-      for (arma::uword r = 0; r < p; ++r)
-        for (arma::uword c = 0; c < p; ++c)
-          Z_ggm_int(r, c) = (Z_ggm(r, c) == 1) ? 1 : 0;
       arma::ivec gamma_iv(p);
       for (arma::uword j = 0; j < p; ++j) gamma_iv(j) = (int)gamma(j);
-      init_lb_single_scores_ggm(Z_ggm_int, (int)p, gamma_iv, mu, eta1,
+      init_lb_single_scores_ggm(Z_ggm, (int)p, gamma_iv, mu, eta1,
                                  lb_score, lb_weight, lb_Z);
     }
 
@@ -648,8 +750,11 @@ Rcpp::List BayesLogit_SingleNet_GGM(
         int g_curr = gamma(j);
         int g_prop = 1 - g_curr;
         double b_curr = beta(j);
+        double gamma_prior_var = use_t_prior ?
+            bvs_imbalanced::beta_prior_var_j(sigmasq, imb_link_code, t_scale, lambda_t(j)) :
+            sigmasq;
         double b_prop =
-            (g_prop == 1) ? R::rnorm(beta0, std::sqrt(sigmasq)) : 0.0;
+            (g_prop == 1) ? R::rnorm(beta0, std::sqrt(gamma_prior_var)) : 0.0;
         double db = b_prop - b_curr;
 
         double ll_diff = 0.0;
@@ -665,11 +770,19 @@ Rcpp::List BayesLogit_SingleNet_GGM(
               calc_loglik_continuous(y, z_prop, alpha, Z_tau, sigmasq) - loglik;
         } else if (is_tte) {
           ll_diff = cox_tracker.propose_diff(xj, db, delta_group_W);
+        } else if (use_cloglog) {
+          for (arma::uword i = 0; i < n; ++i) {
+            double eta_old = alpha + Xb_total(i);
+            double eta_new = eta_old + db * xj(i);
+            ll_diff += bvs_imbalanced::loglik_cloglog_obs(y(i), eta_new) -
+                       bvs_imbalanced::loglik_cloglog_obs(y(i), eta_old);
+          }
         } else {
           for (arma::uword i = 0; i < n; ++i) {
             double eta_old = alpha + Xb_total(i);
             double eta_new = eta_old + db * xj(i);
-            if (is_count) {
+            if (is_count || is_zic) {
+              if (is_zic && zinb_Z_latent(i) == 1u) continue;
               double lw_i = log_w_count(i);
               double eta_old_c =
                   bvs_dadj::clamp_finite(eta_old + lw_i, -50.0, 50.0, 0.0);
@@ -701,7 +814,8 @@ Rcpp::List BayesLogit_SingleNet_GGM(
           int delta_g = 1 - 2 * g_curr;
           arma::ivec gamma_iv(p);
           for (arma::uword jj = 0; jj < p; ++jj) gamma_iv(jj) = (int)gamma(jj);
-          build_lb_single_delta_ggm(Z_ggm_int, (int)p, gamma_iv, eta1,
+          // R2-FIX: use uint8 overload directly on Z_ggm (no copy).
+          build_lb_single_delta_ggm(Z_ggm, (int)p, gamma_iv, eta1,
                                      j, delta_g, lb_score, lb_weight, lb_Z, lb_delta);
           log_ratio += lb_delta.log_q_rev - lb_delta.log_q_fwd;
         } else {
@@ -743,11 +857,16 @@ Rcpp::List BayesLogit_SingleNet_GGM(
 
       // 2. Beta — HMC/NUTS for binary/TTE (if selected),
       //         MALA (binary/count), Fisher-RW (TTE), Gibbs (continuous)
-      if (use_hmc_nuts && !is_continuous && !is_count) {
+      if (use_hmc_nuts && !is_continuous && !is_count && !is_zic) {
         auto compute = [&](const arma::vec &q) -> std::pair<double, arma::vec> {
           if (is_tte) {
             return bvs_hmc::nlp_grad_tte_joint(X, Z_dat, cox_data, active_idx, q,
                                                beta0, tau0, htau, nu0, sigmasq0);
+          }
+          if (is_imbalanced) {
+            return bvs_hmc::nlp_grad_imbalanced_joint(
+                X, y, Z_dat, active_idx, q, beta0, alpha0, tau0, h, htau, nu0,
+                sigmasq0, use_cloglog, use_t_prior, t_scale, lambda_t);
           }
           return bvs_hmc::nlp_grad_binary_joint(X, y, Z_dat, active_idx, q,
                                                 beta0, alpha0, tau0, h, htau,
@@ -827,15 +946,24 @@ Rcpp::List BayesLogit_SingleNet_GGM(
         }
 
         if (!is_tte) {
-          for (arma::uword i = 0; i < n; ++i)
-            mala_resid(i) =
-                y(i) - 1.0 / (1.0 + std::exp(-(alpha + Xb_total(i))));
+          if (use_cloglog) {
+            for (arma::uword i = 0; i < n; ++i)
+              mala_resid(i) = bvs_imbalanced::cloglog_residual(y(i), alpha + Xb_total(i));
+          } else {
+            for (arma::uword i = 0; i < n; ++i)
+              mala_resid(i) =
+                  y(i) - 1.0 / (1.0 + std::exp(-(alpha + Xb_total(i))));
+          }
         }
       } else if (!is_continuous) {
         // Refresh MALA residuals after gamma flips
         if (!is_tte) {
-          if (is_count) {
+          if (use_cloglog) {
+            for (arma::uword i = 0; i < n; ++i)
+              mala_resid(i) = bvs_imbalanced::cloglog_residual(y(i), alpha + Xb_total(i));
+          } else if (is_count || is_zic) {
             for (arma::uword i = 0; i < n; ++i) {
+              if (is_zic && zinb_Z_latent(i) == 1u) { mala_resid(i) = 0.0; continue; }
               const double eta = bvs_dadj::clamp_finite(
                   alpha + Xb_total(i) + log_w_count(i), -50.0, 50.0, 0.0);
               mala_resid(i) = (double)y_count(i) - std::exp(eta);
@@ -876,24 +1004,32 @@ Rcpp::List BayesLogit_SingleNet_GGM(
               cox_tracker.compute_H_vec(cox_H);
             }
           } else {
-            // Component-wise MALA for binary/count
+            // Component-wise MALA for binary/count/imbalanced_binary
+            double pvar_j = use_t_prior ?
+                bvs_imbalanced::beta_prior_var_j(sigmasq, imb_link_code, t_scale, lambda_t(j)) :
+                sigmasq;
             double g_j =
-                arma::dot(xj, mala_resid) - (beta(j) - beta0) / sigmasq;
+                arma::dot(xj, mala_resid) - (beta(j) - beta0) / pvar_j;
             double h_j =
-                std::min(0.5 * sigmasq / (X_col_sq_sums(j) + 1.0), 1.0);
+                std::min(0.5 * pvar_j / (X_col_sq_sums(j) + 1.0), 1.0);
             double mean_fwd = beta(j) + 0.5 * h_j * g_j;
             double b_prop = R::rnorm(mean_fwd, std::sqrt(h_j));
             double db = b_prop - beta(j);
             double ll_prop = 0.0;
-            double g_j_back = -(b_prop - beta0) / sigmasq;
+            double g_j_back = -(b_prop - beta0) / pvar_j;
             for (arma::uword i = 0; i < n; ++i) {
-              if (is_count) {
+              if (is_count || is_zic) {
+                if (is_zic && zinb_Z_latent(i) == 1u) continue;
                 const double ep = bvs_dadj::clamp_finite(
                     alpha + Xb_total(i) + db * xj(i) + log_w_count(i), -50.0,
                     50.0, 0.0);
                 const double lp = std::exp(ep);
                 ll_prop += (double)y_count(i) * ep - lp;
                 g_j_back += ((double)y_count(i) - lp) * xj(i);
+              } else if (use_cloglog) {
+                const double ep = alpha + Xb_total(i) + db * xj(i);
+                ll_prop += bvs_imbalanced::loglik_cloglog_obs(y(i), ep);
+                g_j_back += bvs_imbalanced::cloglog_residual(y(i), ep) * xj(i);
               } else {
                 const double ep = alpha + Xb_total(i) + db * xj(i);
                 const double pp = 1.0 / (1.0 + std::exp(-ep));
@@ -911,13 +1047,17 @@ Rcpp::List BayesLogit_SingleNet_GGM(
             double prd =
                 -0.5 *
                 (std::pow(b_prop - beta0, 2) - std::pow(beta(j) - beta0, 2)) /
-                sigmasq;
+                pvar_j;
             if (bvs_dadj::safe_mh_accept(lld + prd + lqb - lqf)) {
               beta(j) = b_prop;
               Xb_total += db * xj;
               loglik = ll_prop;
-              if (is_count) {
+              if (use_cloglog) {
+                for (arma::uword i = 0; i < n; ++i)
+                  mala_resid(i) = bvs_imbalanced::cloglog_residual(y(i), alpha + Xb_total(i));
+              } else if (is_count || is_zic) {
                 for (arma::uword i = 0; i < n; ++i) {
+                  if (is_zic && zinb_Z_latent(i) == 1u) { mala_resid(i) = 0.0; continue; }
                   const double eta = bvs_dadj::clamp_finite(
                       alpha + Xb_total(i) + log_w_count(i), -50.0, 50.0, 0.0);
                   mala_resid(i) = (double)y_count(i) - std::exp(eta);
@@ -951,6 +1091,14 @@ Rcpp::List BayesLogit_SingleNet_GGM(
 
     } // end inner thinning for gamma + beta
 
+    // ---------------------------------------------------------
+    // STEP B2: Lambda (Student-t latent scales) — Gibbs step
+    // ---------------------------------------------------------
+    if (use_t_prior) {
+      bvs_imbalanced::gibbs_update_lambda(lambda_t, beta, gamma, beta0,
+                                          sigmasq, t_df, t_scale);
+    }
+
     // 3. Alpha — MALA (binary/count), exact Gibbs (continuous)
     if (!is_continuous && !is_tte && !use_hmc_nuts) {
       double sum_resid = arma::accu(mala_resid);
@@ -961,12 +1109,17 @@ Rcpp::List BayesLogit_SingleNet_GGM(
       double ll_a_prop = 0.0;
       double g_alpha_back = -(a_prop - alpha0) / (h * sigmasq);
       for (arma::uword i = 0; i < n; ++i) {
-        if (is_count) {
+        if (is_count || is_zic) {
+          if (is_zic && zinb_Z_latent(i) == 1u) continue;
           const double eta = bvs_dadj::clamp_finite(
               a_prop + Xb_total(i) + log_w_count(i), -50.0, 50.0, 0.0);
           const double lam = std::exp(eta);
           ll_a_prop += (double)y_count(i) * eta - lam;
           g_alpha_back += (double)y_count(i) - lam;
+        } else if (use_cloglog) {
+          const double eta = a_prop + Xb_total(i);
+          ll_a_prop += bvs_imbalanced::loglik_cloglog_obs(y(i), eta);
+          g_alpha_back += bvs_imbalanced::cloglog_residual(y(i), eta);
         } else {
           const double eta = a_prop + Xb_total(i);
           const double p = 1.0 / (1.0 + std::exp(-eta));
@@ -990,8 +1143,12 @@ Rcpp::List BayesLogit_SingleNet_GGM(
                                    lq_fwd_a)) {
         alpha = a_prop;
         loglik = ll_a_prop;
-        if (is_count) {
+        if (use_cloglog) {
+          for (arma::uword i = 0; i < n; ++i)
+            mala_resid(i) = bvs_imbalanced::cloglog_residual(y(i), alpha + Xb_total(i));
+        } else if (is_count || is_zic) {
           for (arma::uword i = 0; i < n; ++i) {
+            if (is_zic && zinb_Z_latent(i) == 1u) { mala_resid(i) = 0.0; continue; }
             const double eta = bvs_dadj::clamp_finite(
                 alpha + Xb_total(i) + log_w_count(i), -50.0, 50.0, 0.0);
             mala_resid(i) = (double)y_count(i) - std::exp(eta);
@@ -1052,12 +1209,16 @@ Rcpp::List BayesLogit_SingleNet_GGM(
             double g_k_back = -(t_prop - tau0) / (htau * sigmasq);
             for (arma::uword i = 0; i < n; ++i) {
               const double neb = alpha + Xb_total(i) + dt * zk(i);
-              if (is_count) {
+              if (is_count || is_zic) {
+                if (is_zic && zinb_Z_latent(i) == 1u) continue;
                 const double ep = bvs_dadj::clamp_finite(neb + log_w_count(i),
                                                          -50.0, 50.0, 0.0);
                 const double lp = std::exp(ep);
                 ll_t_prop += (double)y_count(i) * ep - lp;
                 g_k_back += ((double)y_count(i) - lp) * zk(i);
+              } else if (use_cloglog) {
+                ll_t_prop += bvs_imbalanced::loglik_cloglog_obs(y(i), neb);
+                g_k_back += bvs_imbalanced::cloglog_residual(y(i), neb) * zk(i);
               } else {
                 const double pp = 1.0 / (1.0 + std::exp(-neb));
                 ll_t_prop +=
@@ -1080,12 +1241,16 @@ Rcpp::List BayesLogit_SingleNet_GGM(
               Xb_total += dt * zk;
               Z_tau += dt * zk;
               loglik = ll_t_prop;
-              if (is_count) {
+              if (is_count || is_zic) {
                 for (arma::uword i = 0; i < n; ++i) {
+                  if (is_zic && zinb_Z_latent(i) == 1u) { mala_resid(i) = 0.0; continue; }
                   const double eta = bvs_dadj::clamp_finite(
                       alpha + Xb_total(i) + log_w_count(i), -50.0, 50.0, 0.0);
                   mala_resid(i) = (double)y_count(i) - std::exp(eta);
                 }
+              } else if (use_cloglog) {
+                for (arma::uword i = 0; i < n; ++i)
+                  mala_resid(i) = bvs_imbalanced::cloglog_residual(y(i), alpha + Xb_total(i));
               } else {
                 for (arma::uword i = 0; i < n; ++i)
                   mala_resid(i) =
@@ -1121,8 +1286,12 @@ Rcpp::List BayesLogit_SingleNet_GGM(
         // Sufficient statistics
         double ss_beta = 0.0;
         for (arma::uword k = 0; k < active_idx.size(); ++k) {
-          double d = beta(active_idx[k]) - beta0;
-          ss_beta += d * d;
+          const arma::uword jj = active_idx[k];
+          const double d = beta(jj) - beta0;
+          // For Student-t prior: scale by 1/(s^2 * lambda_j)
+          double scale_fac = use_t_prior ?
+              1.0 / (t_scale * t_scale * lambda_t(jj)) : 1.0;
+          ss_beta += d * d * scale_fac;
         }
         double ss_tau = 0.0;
         for (arma::uword j = 0; j < ntau; ++j) {
@@ -1170,7 +1339,8 @@ Rcpp::List BayesLogit_SingleNet_GGM(
 
     // 5. Update eta1 via Moller et al. (2006) — passes Z_ggm directly
     moller_update_eta(Z_ggm, mu, eta1, eta1_sd, mu_tilde, eta1_tilde, gamma,
-                      e_eta, f_eta, T_max, proposal_type, eta1_adapter);
+                      e_eta, f_eta, T_max, proposal_type, eta1_adapter,
+                      use_cftp);
 
     if (iter >= burnin && (iter - burnin) % thin == 0) {
       int s = (iter - burnin) / thin;
@@ -1237,5 +1407,11 @@ Rcpp::List BayesLogit_SingleNet_GGM(
     result["hmc_nuts_diagnostics"] = hmc_diag.to_list(hmc_epsilon);
   if (store_gamma)
     result["gamma"] = gamma_out;
+  if (is_imbalanced)
+    result["lambda_t"] = lambda_t;
+  if (is_zic) {
+    result["zinb_pi"] = zinb_pi_curr;
+    result["zinb_r"] = zinb_r_curr;
+  }
   return result;
 }

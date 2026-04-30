@@ -57,10 +57,11 @@
 #' @param beta0     Prior mean for coefficients (default 0).
 #'
 #' @param n_mh_gamma  Number of gamma MH updates per MCMC iteration
-#'   (default 3; used by GGM/sparse backends).
+#'   (default 3; used across all PG backends, including
+#'   \code{adj_type = "fixed"} and \code{"glasso_fixed"}).
 #' @param use_lb_gamma Logical; use Zanella (2020) locally-balanced
 #'   \eqn{g(t)=\sqrt{t}} coordinate proposals for gamma updates across
-#'   \emph{all 12 backends} (default \code{TRUE}). Proposal weights are
+#'   all PG backends (dense and sparse; default \code{TRUE}). Proposal weights are
 #'   \eqn{w_j = \exp(0.5 \cdot \mathrm{clip}[(1-2\gamma_j)(\mu + \eta N_j)])};
 #'   the MH ratio is corrected by the log proposal ratio.
 #'   Set \code{FALSE} to revert to uniform-coordinate baseline.

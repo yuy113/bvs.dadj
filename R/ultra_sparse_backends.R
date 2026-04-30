@@ -26,7 +26,7 @@
   M
 }
 
-.init_ultra_sparse_state <- function(y, p, beta_init, gamma_init, alpha_init, outcome_type = c("binary", "continuous", "TTE", "count")) {
+.init_ultra_sparse_state <- function(y, p, beta_init, gamma_init, alpha_init, outcome_type = c("binary", "continuous", "TTE", "count", "imbalanced_binary", "ZIC")) {
   if (is.character(outcome_type) && length(outcome_type) == 1L && identical(outcome_type, "contiousou")) {
     outcome_type <- "continuous"
   }
@@ -38,7 +38,7 @@
     gamma_init <- integer(p)
   }
   if (is.null(alpha_init)) {
-    if (outcome_type == "binary") {
+    if (outcome_type == "binary" || outcome_type == "imbalanced_binary") {
       y01 <- as.numeric(y)
       if (all(y01 %in% c(-1, 1))) {
         y01 <- 0.5 * (y01 + 1)
@@ -46,7 +46,7 @@
       ybar <- mean(y01, na.rm = TRUE)
       ybar <- min(max(ybar, 1e-4), 1 - 1e-4)
       alpha_init <- qlogis(ybar)
-    } else if (outcome_type == "count") {
+    } else if (outcome_type == "count" || outcome_type == "ZIC") {
       alpha_init <- log(mean(as.numeric(y), na.rm = TRUE) + 1e-4)
     } else if (outcome_type == "TTE") {
       alpha_init <- 0
@@ -66,6 +66,20 @@
 }
 
 .prepare_sparse_S_triplet <- function(X, S_ggm = NULL, p_max_crossprod = 1e4) {
+  ## If S_ggm is already a pre-decomposed CSC triplet list (from prepare_sparse_S()),
+
+  ## validate and return it directly, avoiding an unnecessary round-trip.
+  if (is.list(S_ggm) && !inherits(S_ggm, "Matrix") &&
+      all(c("S_i", "S_p", "S_x", "S_diag", "p") %in% names(S_ggm))) {
+    return(list(
+      S_i    = as.integer(S_ggm$S_i),
+      S_p    = as.integer(S_ggm$S_p),
+      S_x    = as.numeric(S_ggm$S_x),
+      S_diag = as.numeric(S_ggm$S_diag),
+      p      = as.integer(S_ggm$p)
+    ))
+  }
+
   if (is.null(S_ggm)) {
     p <- ncol(X)
     if (p >= p_max_crossprod) {

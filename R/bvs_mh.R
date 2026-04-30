@@ -30,10 +30,11 @@
 #'   \code{outcome_type = "TTE"} (\code{1}=event, \code{0}=censored; or
 #'   \code{\{-1,1\}} allowed). Ignored for non-TTE outcomes.
 #' @param outcome_type Character outcome model:
-#'   \code{"binary"} (logistic; default) or \code{"continuous"}
-#'   (Gaussian with conjugate normal-inverse-gamma updates) or \code{"TTE"}
-#'   (Cox partial likelihood for right-censored time-to-event outcomes) or
-#'   \code{"count"} (negative-binomial via Poisson-Gamma augmentation).
+#'   \code{"binary"} (logistic; default), \code{"continuous"}
+#'   (Gaussian with conjugate normal-inverse-gamma updates), \code{"TTE"}
+#'   (Cox partial likelihood for right-censored time-to-event outcomes),
+#'   \code{"count"} (negative-binomial via Poisson-Gamma augmentation), or
+#'   \code{"imbalanced_binary"} (robust Student-t prior or cloglog link).
 #' @param adj_type  Character string specifying the adjacency structure.
 #'   One of:
 #'   \describe{
@@ -86,7 +87,8 @@
 #' @param beta0     Prior mean for coefficients (default 0).
 #'
 #' @param n_mh_gamma  Number of gamma MH updates per MCMC iteration
-#'   (default 3; used by GGM/sparse backends).
+#'   (default 3; used by GGM backends in both dense and sparse modes).
+#'   Dense fixed/glasso backends use \code{n_thin_gb} instead.
 #' @param use_lb_gamma Logical; use Zanella (2020) locally-balanced
 #'   \eqn{g(t)=\sqrt{t}} coordinate proposals for gamma updates across
 #'   \emph{all 12 backends} (default \code{TRUE}). Proposal weights are
@@ -100,7 +102,11 @@
 #'   (default -4; set equal to mu to use the exact Exchange Algorithm).
 #' @param eta1_tilde Auxiliary eta1 coupling for the Exchange Algorithm (default 0.5).
 #' @param eta2_tilde Auxiliary eta2 coupling for the Exchange Algorithm (default 0.5).
-#' @param e_eta     Beta prior shape \code{a} for eta (default 1).
+#' @param e_eta     Beta prior shape \code{a} for eta (default 2).
+#'   With \code{f_eta = 1}, this gives a Beta(2,1) prior on eta/eta_sd,
+#'   which concentrates mass toward larger coupling values (prior mean =
+#'   2/3 * eta_sd). This helps prevent the exchange algorithm from getting
+#'   trapped near eta=0 for dense adjacency matrices.
 #' @param f_eta     Beta prior shape \code{b} for eta (default 1).
 #' @param Tmax      Maximum Propp-Wilson CFTP doubling horizon (default 64).
 #'   If CFTP does not coalesce within \code{Tmax} doublings, the eta proposal
@@ -140,6 +146,14 @@
 #'   jointly update active \code{beta}, \code{alpha}, \code{tau}, and
 #'   \code{log(sigmasq)}; for TTE they jointly update active \code{beta},
 #'   \code{tau}, and \code{log(sigmasq)} with \code{alpha} fixed at 0.
+#' @param imbalanced_link Character string specifying the link function for
+#'   \code{outcome_type = "imbalanced_binary"}: \code{"logit_t"} (logistic link
+#'   with robust Student-t prior on beta) or \code{"cloglog"} (complementary
+#'   log-log link with Gaussian prior on beta).
+#' @param t_df Degrees of freedom for the robust Student-t prior when using
+#'   \code{imbalanced_link = "logit_t"} (default 1.0, Cauchy prior).
+#' @param t_scale Scale factor for the robust Student-t prior when using
+#'   \code{imbalanced_link = "logit_t"} (default 2.5).
 #' @param hmc_step_size Step size (epsilon) for the Hamiltonian Monte Carlo
 #'   (HMC) and No-U-Turn Sampler (NUTS) algorithms (default 0.1). Note that
 #'   NUTS adapts this automatically during burn-in.
@@ -147,6 +161,19 @@
 #'   (HMC) (default 10).
 #' @param nuts_max_treedepth Maximum tree depth for the No-U-Turn Sampler
 #'   (NUTS) algorithm (default 10).
+#' @param zinb_r Initial dispersion parameter \eqn{r} for the negative binomial
+#'   component of the ZINB model (default 1.0). Used when
+#'   \code{outcome_type = "ZIC"}.
+#' @param zinb_a_pi Beta prior shape \eqn{a_\pi} for the zero-inflation
+#'   probability \eqn{\pi} (default 1.0).
+#' @param zinb_b_pi Beta prior shape \eqn{b_\pi} for the zero-inflation
+#'   probability \eqn{\pi} (default 1.0).
+#' @param zinb_a_r Gamma prior shape \eqn{a_r} for the NB dispersion \eqn{r}
+#'   (default 1.0). Only used when \code{zinb_estimate_r = TRUE}.
+#' @param zinb_b_r Gamma prior rate \eqn{b_r} for the NB dispersion \eqn{r}
+#'   (default 0.1). Only used when \code{zinb_estimate_r = TRUE}.
+#' @param zinb_estimate_r Logical; if \code{TRUE}, the NB dispersion \eqn{r}
+#'   is updated via Metropolis-Hastings within the MCMC (default \code{FALSE}).
 #'
 #' @return An object of class \code{"bvs"}, a named list with:
 #'   \describe{
@@ -170,7 +197,12 @@
 #'     \item{sampler}{Character sampler identifier: \code{"mh"}, \code{"hmc"},
 #'       or \code{"nuts"}.}
 #'     \item{outcome_type}{Character outcome model: \code{"binary"},
-#'       \code{"continuous"}, \code{"TTE"}, or \code{"count"}.}
+#'       \code{"continuous"}, \code{"TTE"}, \code{"count"},
+#'       \code{"imbalanced_binary"}, or \code{"ZIC"}.}
+#'     \item{zinb_pi}{Estimated zero-inflation probability \eqn{\pi} (scalar;
+#'       \code{NULL} unless \code{outcome_type = "ZIC"}).}
+#'     \item{zinb_r_final}{Final NB dispersion \eqn{r} (scalar;
+#'       \code{NULL} unless \code{outcome_type = "ZIC"}).}
 #'     \item{niter}{Number of stored post-burn-in iterations.}
 #'     \item{burnin}{Number of burn-in iterations discarded.}
 #'     \item{thin}{Thinning interval used.}
@@ -285,7 +317,8 @@
 #' @export
 bvs_mh <- function(X, y,
                    event = NULL,
-                   outcome_type = c("binary", "continuous", "TTE", "count"),
+                   outcome_type = c("binary", "continuous", "TTE", "count",
+                                    "imbalanced_binary", "ZIC"),
                    adj_type = c(
                      "fixed", "dual_fixed", "glasso",
                      "glasso_fixed", "ggm", "ggm_fixed"
@@ -314,7 +347,7 @@ bvs_mh <- function(X, y,
                    eta1_sd = 0.5, eta2_sd = 0.5,
                    mu_tilde = -4,
                    eta1_tilde = 0.5, eta2_tilde = 0.5,
-                   e_eta = 1, f_eta = 1,
+                   e_eta = 2, f_eta = 1,
                    Tmax = 64L,
                    proposal_type = 1L,
                    # GGM SSVS
@@ -322,6 +355,10 @@ bvs_mh <- function(X, y,
                    v1_ggm = NULL,
                    pii_ggm = NULL,
                    lambda_ggm = 1,
+                   # SSSL mode (Wang 2015) for p > n GGM
+                   ggm_sssl = "auto",
+                   v0_sssl = 0.01,
+                   v1_sssl = 1.0,
                    # Init (optional)
                    beta_init = NULL,
                    gamma_init = NULL,
@@ -334,7 +371,20 @@ bvs_mh <- function(X, y,
                    alg_type = c("MH", "HMC", "NUTS"),
                    hmc_step_size = 0.1,
                    hmc_n_leapfrog = 10L,
-                   nuts_max_treedepth = 10L) {
+                   nuts_max_treedepth = 10L,
+                   # Imbalanced binary parameters
+                   imbalanced_link = c("logit_t", "cloglog"),
+                   t_df = 1.0,
+                   t_scale = 2.5,
+                   # Zero-Inflated Count (ZINB) parameters
+                   zinb_r = 1.0,
+                   zinb_a_pi = 1.0,
+                   zinb_b_pi = 1.0,
+                   zinb_a_r = 1.0,
+                   zinb_b_r = 0.1,
+                   zinb_estimate_r = FALSE,
+                   # CFTP control
+                   use_cftp = FALSE) {
   mc <- match.call()
   alpha_init_missing <- is.null(alpha_init)
   if (is.character(outcome_type) && length(outcome_type) == 1L && identical(outcome_type, "contiousou")) {
@@ -345,9 +395,9 @@ bvs_mh <- function(X, y,
   glasso_criterion <- match.arg(glasso_criterion)
   alg_type <- match.arg(alg_type)
 
-  # HMC/NUTS only applicable for binary and TTE outcomes
+  # HMC/NUTS only applicable for binary, TTE, and imbalanced_binary outcomes
   if (alg_type %in% c("HMC", "NUTS") &&
-    !outcome_type %in% c("binary", "TTE")) {
+    !outcome_type %in% c("binary", "TTE", "imbalanced_binary")) {
     warning(sprintf(
       "alg_type='%s' is only supported for outcome_type='binary' or 'TTE'; falling back to 'MH'.",
       alg_type
@@ -434,8 +484,43 @@ bvs_mh <- function(X, y,
       warning("Argument 'event' is ignored unless outcome_type='TTE'.", call. = FALSE)
       event <- NULL
     }
+  } else if (outcome_type == "imbalanced_binary") {
+    # Same validation as binary
+    y_ok_01 <- all(y %in% c(0, 1))
+    y_ok_11 <- all(y %in% c(-1, 1))
+    if (!y_ok_01 && y_ok_11) {
+      y <- 0.5 * (y + 1)
+    } else if (!y_ok_01) {
+      stop("For outcome_type='imbalanced_binary', y must be in {0,1} or {-1,1}.")
+    }
+    if (!is.null(event)) {
+      warning("Argument 'event' is ignored unless outcome_type='TTE'.", call. = FALSE)
+      event <- NULL
+    }
+    imbalanced_link <- match.arg(imbalanced_link)
+    stopifnot(is.numeric(t_df), length(t_df) == 1L, t_df > 0)
+    stopifnot(is.numeric(t_scale), length(t_scale) == 1L, t_scale > 0)
+  } else if (outcome_type == "ZIC") {
+    if (!all(is.finite(y))) {
+      stop("For outcome_type='ZIC', y must be finite non-negative integers.")
+    }
+    y_round <- round(y)
+    if (any(abs(y - y_round) > 1e-8) || any(y_round < 0)) {
+      stop("For outcome_type='ZIC', y must be finite non-negative integers.")
+    }
+    y <- y_round
+    if (!is.null(event)) {
+      warning("Argument 'event' is ignored unless outcome_type='TTE'.", call. = FALSE)
+      event <- NULL
+    }
+    stopifnot(is.numeric(zinb_r), length(zinb_r) == 1L, zinb_r > 0)
+    stopifnot(is.numeric(zinb_a_pi), length(zinb_a_pi) == 1L, zinb_a_pi > 0)
+    stopifnot(is.numeric(zinb_b_pi), length(zinb_b_pi) == 1L, zinb_b_pi > 0)
+    stopifnot(is.numeric(zinb_a_r), length(zinb_a_r) == 1L, zinb_a_r > 0)
+    stopifnot(is.numeric(zinb_b_r), length(zinb_b_r) == 1L, zinb_b_r > 0)
+    stopifnot(is.logical(zinb_estimate_r), length(zinb_estimate_r) == 1L)
   } else {
-    stop("outcome_type must be one of 'binary', 'continuous', 'TTE', or 'count'.")
+    stop("outcome_type must be one of 'binary', 'continuous', 'TTE', 'count', 'imbalanced_binary', or 'ZIC'.")
   }
   # RMH-3: Validate niter/burnin/thin to prevent UB in C++
   stopifnot(is.numeric(niter), length(niter) == 1, niter > 0, niter == as.integer(niter))
@@ -456,6 +541,19 @@ bvs_mh <- function(X, y,
   if (is.null(v1_ggm)) v1_ggm <- (50^2) * v0_ggm
   if (is.null(pii_ggm)) pii_ggm <- if (p > 1) 4 / (p - 1) else 0.5
 
+  # SSSL mode auto-detection: use SSSL when p > n (Wang 2015)
+  use_sssl <- FALSE
+  if (is.character(ggm_sssl) && ggm_sssl == "auto") {
+    use_sssl <- (p > n)
+  } else {
+    use_sssl <- isTRUE(ggm_sssl)
+  }
+  if (use_sssl && adj_type %in% c("ggm", "ggm_fixed")) {
+    message(sprintf(
+      "SSSL mode enabled (p=%d > n=%d): v0_sssl=%.4f, v1_sssl=%.4f (Wang 2015)",
+      p, n, v0_sssl, v1_sssl))
+  }
+
   # Initialisation
   if (is.null(beta_init) || is.null(gamma_init) || is.null(alpha_init)) {
     if (use_sparse_backend) {
@@ -474,6 +572,8 @@ bvs_mh <- function(X, y,
   if (outcome_type == "TTE") {
     alpha_init <- 0
   } else if (outcome_type == "count" && alpha_init_missing) {
+    alpha_init <- log(mean(y) + 1e-4)
+  } else if (outcome_type == "ZIC" && alpha_init_missing) {
     alpha_init <- log(mean(y) + 1e-4)
   }
 
@@ -539,7 +639,13 @@ bvs_mh <- function(X, y,
         alg_type = alg_type, hmc_step_size = hmc_step_size,
         hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
         nuts_max_treedepth = as.integer(nuts_max_treedepth),
-        use_lb_gamma = isTRUE(use_lb_gamma)
+        use_lb_gamma = isTRUE(use_lb_gamma),
+        imbalanced_link = if (outcome_type == "imbalanced_binary") imbalanced_link else "logit_t",
+        t_df = t_df, t_scale = t_scale,
+        zinb_r = zinb_r, zinb_a_pi = zinb_a_pi, zinb_b_pi = zinb_b_pi,
+        zinb_a_r = zinb_a_r, zinb_b_r = zinb_b_r,
+        zinb_estimate_r = isTRUE(zinb_estimate_r),
+        use_cftp = isTRUE(use_cftp)
       )
     },
     "dual_fixed" = {
@@ -567,7 +673,13 @@ bvs_mh <- function(X, y,
         alg_type = alg_type, hmc_step_size = hmc_step_size,
         hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
         nuts_max_treedepth = as.integer(nuts_max_treedepth),
-        use_lb_gamma = isTRUE(use_lb_gamma)
+        use_lb_gamma = isTRUE(use_lb_gamma),
+        imbalanced_link = if (outcome_type == "imbalanced_binary") imbalanced_link else "logit_t",
+        t_df = t_df, t_scale = t_scale,
+        zinb_r = zinb_r, zinb_a_pi = zinb_a_pi, zinb_b_pi = zinb_b_pi,
+        zinb_a_r = zinb_a_r, zinb_b_r = zinb_b_r,
+        zinb_estimate_r = isTRUE(zinb_estimate_r),
+        use_cftp = isTRUE(use_cftp)
       )
     },
     "glasso" = {
@@ -591,7 +703,13 @@ bvs_mh <- function(X, y,
         alg_type = alg_type, hmc_step_size = hmc_step_size,
         hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
         nuts_max_treedepth = as.integer(nuts_max_treedepth),
-        use_lb_gamma = isTRUE(use_lb_gamma)
+        use_lb_gamma = isTRUE(use_lb_gamma),
+        imbalanced_link = if (outcome_type == "imbalanced_binary") imbalanced_link else "logit_t",
+        t_df = t_df, t_scale = t_scale,
+        zinb_r = zinb_r, zinb_a_pi = zinb_a_pi, zinb_b_pi = zinb_b_pi,
+        zinb_a_r = zinb_a_r, zinb_b_r = zinb_b_r,
+        zinb_estimate_r = isTRUE(zinb_estimate_r),
+        use_cftp = isTRUE(use_cftp)
       )
     },
     "glasso_fixed" = {
@@ -620,7 +738,13 @@ bvs_mh <- function(X, y,
         alg_type = alg_type, hmc_step_size = hmc_step_size,
         hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
         nuts_max_treedepth = as.integer(nuts_max_treedepth),
-        use_lb_gamma = isTRUE(use_lb_gamma)
+        use_lb_gamma = isTRUE(use_lb_gamma),
+        imbalanced_link = if (outcome_type == "imbalanced_binary") imbalanced_link else "logit_t",
+        t_df = t_df, t_scale = t_scale,
+        zinb_r = zinb_r, zinb_a_pi = zinb_a_pi, zinb_b_pi = zinb_b_pi,
+        zinb_a_r = zinb_a_r, zinb_b_r = zinb_b_r,
+        zinb_estimate_r = isTRUE(zinb_estimate_r),
+        use_cftp = isTRUE(use_cftp)
       )
     },
     "ggm" = {
@@ -654,7 +778,16 @@ bvs_mh <- function(X, y,
           alg_type = alg_type,
           hmc_step_size = hmc_step_size,
           hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
-          nuts_max_treedepth = as.integer(nuts_max_treedepth)
+          nuts_max_treedepth = as.integer(nuts_max_treedepth),
+          imbalanced_link = if (outcome_type == "imbalanced_binary") imbalanced_link else "logit_t",
+          t_df = t_df, t_scale = t_scale,
+          zinb_r = zinb_r, zinb_a_pi = zinb_a_pi, zinb_b_pi = zinb_b_pi,
+          zinb_a_r = zinb_a_r, zinb_b_r = zinb_b_r,
+          zinb_estimate_r = isTRUE(zinb_estimate_r),
+          use_sssl = use_sssl,
+          v0_sssl = v0_sssl,
+          v1_sssl = v1_sssl,
+          use_cftp = isTRUE(use_cftp)
         )
 
         n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
@@ -684,7 +817,13 @@ bvs_mh <- function(X, y,
           hmc_step_size = hmc_step_size,
           hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
           nuts_max_treedepth = as.integer(nuts_max_treedepth),
-          use_lb_gamma = isTRUE(use_lb_gamma)
+          use_lb_gamma = isTRUE(use_lb_gamma),
+          imbalanced_link = if (outcome_type == "imbalanced_binary") imbalanced_link else "logit_t",
+          t_df = t_df, t_scale = t_scale,
+          zinb_r = zinb_r, zinb_a_pi = zinb_a_pi, zinb_b_pi = zinb_b_pi,
+          zinb_a_r = zinb_a_r, zinb_b_r = zinb_b_r,
+          zinb_estimate_r = isTRUE(zinb_estimate_r),
+          use_cftp = isTRUE(use_cftp)
         )
       }
     },
@@ -729,7 +868,16 @@ bvs_mh <- function(X, y,
           alg_type = alg_type,
           hmc_step_size = hmc_step_size,
           hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
-          nuts_max_treedepth = as.integer(nuts_max_treedepth)
+          nuts_max_treedepth = as.integer(nuts_max_treedepth),
+          imbalanced_link = if (outcome_type == "imbalanced_binary") imbalanced_link else "logit_t",
+          t_df = t_df, t_scale = t_scale,
+          zinb_r = zinb_r, zinb_a_pi = zinb_a_pi, zinb_b_pi = zinb_b_pi,
+          zinb_a_r = zinb_a_r, zinb_b_r = zinb_b_r,
+          zinb_estimate_r = isTRUE(zinb_estimate_r),
+          use_sssl = use_sssl,
+          v0_sssl = v0_sssl,
+          v1_sssl = v1_sssl,
+          use_cftp = isTRUE(use_cftp)
         )
 
         n_save <- as.integer(niter %/% max(1L, as.integer(thin)))
@@ -763,7 +911,13 @@ bvs_mh <- function(X, y,
           hmc_step_size = hmc_step_size,
           hmc_n_leapfrog = as.integer(hmc_n_leapfrog),
           nuts_max_treedepth = as.integer(nuts_max_treedepth),
-          use_lb_gamma = isTRUE(use_lb_gamma)
+          use_lb_gamma = isTRUE(use_lb_gamma),
+          imbalanced_link = if (outcome_type == "imbalanced_binary") imbalanced_link else "logit_t",
+          t_df = t_df, t_scale = t_scale,
+          zinb_r = zinb_r, zinb_a_pi = zinb_a_pi, zinb_b_pi = zinb_b_pi,
+          zinb_a_r = zinb_a_r, zinb_b_r = zinb_b_r,
+          zinb_estimate_r = isTRUE(zinb_estimate_r),
+          use_cftp = isTRUE(use_cftp)
         )
       }
     }
@@ -793,6 +947,9 @@ bvs_mh <- function(X, y,
     Z_list = result$Z_list,
     Z_pip = result$Z_pip,
     hmc_nuts_diagnostics = result$hmc_nuts_diagnostics,
+    lambda_t = if (outcome_type == "imbalanced_binary") result$lambda_t else NULL,
+    zinb_pi = if (outcome_type == "ZIC") result$zinb_pi else NULL,
+    zinb_r_final = if (outcome_type == "ZIC") result$zinb_r else NULL,
     gamma_pip = gamma_pip,
     call = mc,
     adj_type = adj_type,

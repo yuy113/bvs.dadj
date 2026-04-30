@@ -1,6 +1,6 @@
 Package: BVS.DAdj
 Title: Bayesian Variable Selection with Dual-Adjacency Network-Informed Ising Priors
-Version: 0.1.0
+Version: 0.3.0
 Author: Yubing Yao [aut, cre], Mahlet Tadesse [aut], Raji Balasubramanian [aut]
 Maintainer: Yubing Yao <yyao@umass.edu>
 Authors@R: c(
@@ -17,8 +17,10 @@ Description: MCMC methods for Bayesian variable selection with Ising/MRF priors
     Betancourt 2017) for active parameter-block updates in binary and
     time-to-event models; it supports binary logistic outcomes, continuous
     Gaussian outcomes, right-censored time-to-event outcomes via Cox partial
-    likelihood, and overdispersed count outcomes via a negative-binomial
-    (Poisson-Gamma) representation. The Polya-Gamma sampler targets binary
+    likelihood, overdispersed count outcomes via a negative-binomial
+    (Poisson-Gamma) representation, imbalanced binary outcomes via cloglog 
+    or robust Student-t priors, and zero-inflated count (ZIC) outcomes via a
+    point-mass/negative-binomial mixture. The Polya-Gamma sampler targets binary
     logistic outcomes.
     Supports fixed, graphical lasso, and Bayesian GGM adjacency structures
     with dense and sparse high-dimensional variants under single and dual

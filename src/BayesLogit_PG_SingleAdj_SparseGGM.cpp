@@ -19,7 +19,11 @@ Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(
     Rcpp::Nullable<Rcpp::NumericVector> tau_in = R_NilValue,
     bool store_beta = true, bool store_gamma = true, bool store_Z_list = false,
     bool store_Z_pip = true, int block_size = 1, int pcg_threshold = 500,
-    bool use_lb_gamma = true) {
+    bool use_lb_gamma = true,
+    bool use_sssl = false,
+    double v0_sssl = 0.01,
+    double v1_sssl = 1.0,
+    bool use_cftp = false) {
   Rcpp::RNGScope scope;
 
   const int n = static_cast<int>(X.n_rows);
@@ -70,7 +74,7 @@ Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(
 
   double alpha = alpha_in;
   double sigmasq = 1.0;
-  double eta1 = std::min(0.01, eta1_sd * 0.5);
+  double eta1 = eta1_sd * 0.5;
 
   // --- tau (Z_dat covariates) ---
   const arma::uword ntau = Z_dat.n_cols;
@@ -155,8 +159,14 @@ Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(
     sigmasq = clamp_scalar(sigmasq, SIGMASQ_MIN, SIGMASQ_MAX);
     const double sd_sig = std::sqrt(sigmasq);
 
-    ggm_column_sweep_sparse(S, Z_active_flag, p, log_pii, log_1pii, lv0h, lv1h,
-                            iv0, iv1, A_sub, s_ggm, noise_ggm, n_edges);
+    if (use_sssl) {
+      ggm_column_sweep_sparse_sssl(S, Z_active_flag, p, log_pii, log_1pii,
+                                   v0_sssl, v1_sssl, A_sub, s_ggm, noise_ggm,
+                                   n_edges);
+    } else {
+      ggm_column_sweep_sparse(S, Z_active_flag, p, log_pii, log_1pii, lv0h,
+                              lv1h, iv0, iv1, A_sub, s_ggm, noise_ggm, n_edges);
+    }
 
     {
       for (int i = 0; i < n; ++i) {
@@ -275,9 +285,10 @@ Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(
           gamma, eta1, p, block_size, neigh_fn);
       auto block = bvs_dadj_block::flatten_clusters(proposal);
       if (!block.empty()) {
+        // R2-FIX: pass Z_tau so the block likelihood uses the full predictor.
         bvs_dadj_block::uncollapsed_gamma_sweep_single_sparse(
             gamma, beta_vec, Xb, X, y01, alpha, sigmasq, beta0, mu, eta1, block,
-            neigh_fn);
+            neigh_fn, &Z_tau);
         // Rebuild active_idx / active_pos
         active_idx.clear();
         for (int jj = 0; jj < p; ++jj)
@@ -410,7 +421,7 @@ Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(
     moller_update_single_sparse(
         S, Z_active_flag, p, mu, eta1, eta1_sd, mu_tilde, eta1_tilde, gamma,
         e_eta, f_eta, T_max, proposal_type, pw_up, pw_dn, pw_om1, pw_om1n,
-        eta1_adapter);
+        eta1_adapter, use_cftp);
 
     maybe_store_sparse_state(
         iter, burnin, thin, n_save, store_beta, store_gamma, store_Z_list,

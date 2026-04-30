@@ -122,31 +122,42 @@ selection: \code{"ebic"} (default) or \code{"ric"}.}
 \item{beta0}{Prior mean for coefficients (default 0).}
 
 \item{n_mh_gamma}{Number of gamma MH updates per MCMC iteration
-(default 3; used by GGM/sparse backends).}
+(default 3; used across all PG backends, including
+\code{adj_type = "fixed"} and \code{"glasso_fixed"}).}
 
-\item{use_lb_gamma}{Logical; for sparse GGM backends, use locally-balanced
-Zanella-style coordinate proposals for gamma updates (default \code{TRUE}).
-Ignored by dense backends.}
+\item{use_lb_gamma}{Logical; use Zanella (2020) locally-balanced
+\eqn{g(t)=\sqrt{t}} coordinate proposals for gamma updates across
+all PG backends (dense and sparse; default \code{TRUE}). Proposal weights are
+\eqn{w_j = \exp(0.5 \cdot \mathrm{clip}[(1-2\gamma_j)(\mu + \eta N_j)])};
+the MH ratio is corrected by the log proposal ratio.
+Set \code{FALSE} to revert to uniform-coordinate baseline.
+Reference: Zanella (2020) \emph{JASA} 115(530), 852--865.}
 
-\item{eta1_sd}{Upper bound for eta1 (single-eta models or dual models, default 0.5).}
+\item{eta1_sd}{Upper bound for eta1 (Uniform(0, eta1_sd) prior; default 0.5).}
 
-\item{eta2_sd}{Upper bound for eta2 (dual-eta models, default 0.5).}
+\item{eta2_sd}{Upper bound for eta2 (dual-eta models; Uniform(0, eta2_sd) prior; default 0.5).}
 
-\item{mu_tilde}{Auxiliary MRF external field for Moller update
-(default -4).}
+\item{mu_tilde}{Auxiliary MRF external field for Moller/Exchange update
+(default -4; set equal to mu to use the exact Exchange Algorithm).}
 
-\item{eta1_tilde}{Auxiliary eta1 coupling (default 0.5).}
+\item{eta1_tilde}{Auxiliary eta1 coupling for the Exchange Algorithm (default 0.5).}
 
-\item{eta2_tilde}{Auxiliary eta2 coupling (default 0.5).}
+\item{eta2_tilde}{Auxiliary eta2 coupling for the Exchange Algorithm (default 0.5).}
 
 \item{e_eta}{Beta prior shape \code{a} for eta (default 1).}
 
 \item{f_eta}{Beta prior shape \code{b} for eta (default 1).}
 
-\item{Tmax}{Maximum Propp-Wilson doubling time (default 64).}
+\item{Tmax}{Maximum Propp-Wilson CFTP doubling horizon (default 64).
+If CFTP does not coalesce within \code{Tmax} doublings, the eta proposal
+is rejected (preserving exactness of the chain) and a warning is issued.}
 
-\item{proposal_type}{Eta proposal kernel: 0 = uniform, 1 = truncated
-normal (default 1).}
+\item{proposal_type}{Eta proposal kernel: \code{0} = logit-transformed
+random walk (default 1 = same, kept for backward compatibility).
+Since IMP-1, both values use a logit-scale Normal random walk,
+mapping \eqn{\eta \in (0, \eta_{\mathrm{sd}})} to the real line and back
+with the Jacobian correction included in the MH ratio.
+Reference: Vihola (2012) \emph{Statistics and Computing} 22(5), 997--1008.}
 
 \item{v0_ggm}{GGM SSVS spike variance (default \code{0.015^2}).}
 
@@ -186,23 +197,24 @@ covariates).}
 \value{
 An object of class \code{"bvs"}, a named list with:
   \describe{
-    \item{beta}{Matrix of posterior beta samples (niter x p).}
-    \item{gamma}{Posterior gamma samples (dense matrix or sparse list,
-      depending on backend/storage options).}
-    \item{gamma_pip}{Posterior inclusion probabilities for gamma
-      (length p).}
-    \item{alpha}{Vector of posterior alpha (intercept) samples.}
-    \item{sigmasq}{Vector of posterior sigma^2 samples.}
-    \item{eta1}{Vector of eta1 (dynamic or single-graph coupling) samples
-      (if applicable).}
-    \item{eta2}{Vector of eta2 (fixed coupling) samples
-      (if applicable).}
-    \item{Z_list}{List of GGM adjacency snapshots (if applicable).}
-    \item{Z_pip}{Posterior edge inclusion probabilities for GGM adjacency
-      (if applicable).}
-    \item{tau}{Matrix of posterior tau (z_dat coefficient) samples
-      (niter x q), or NULL if z_dat was not supplied.}
-    \item{call}{The matched call.}
+    \item{beta}{Matrix of posterior beta samples (\code{niter x p}), or sparse
+      list when \code{store_beta = FALSE} in sparse backends.}
+    \item{gamma}{Posterior gamma samples (\code{niter x p} matrix or sparse
+      index list, depending on backend and storage options).}
+    \item{gamma_pip}{Posterior inclusion probabilities (length \code{p}), or
+      \code{NULL} when not recoverable.}
+    \item{alpha}{Numeric vector of posterior intercept samples (length \code{niter}).}
+    \item{sigmasq}{Numeric vector of posterior \eqn{\sigma^2} samples.}
+    \item{eta1}{Numeric vector of eta1 coupling parameter samples.}
+    \item{eta2}{Numeric vector of eta2 coupling samples (dual-network models only).}
+    \item{Z_list}{List of GGM adjacency snapshots (\code{store_Z_list = TRUE} only).}
+    \item{Z_pip}{Sparse matrix of GGM edge posterior inclusion probabilities
+      (\code{store_Z_pip = TRUE} and GGM \code{adj_type} only).}
+    \item{tau}{Matrix of posterior tau samples (\code{niter x q}), or
+      \code{NULL} if \code{z_dat} was not supplied.}
+    \item{call}{The matched function call.}
+    \item{outcome_type}{Always \code{"binary"} for \code{bvs_pg}.}
+    \item{thin}{Thinning interval used.}
     \item{adj_type}{The adjacency type used.}
     \item{sampler}{Character: \code{"pg"}.}
     \item{niter}{Number of stored post-burn-in iterations.}
@@ -223,6 +235,11 @@ perfect simulation.
 This function uses Polya-Gamma data augmentation (Polson, Scott, and
 Windle 2013) to replace the Metropolis-Hastings updates for beta and
 alpha with exact Gibbs sampling steps, improving mixing and convergence.
+The Ising coupling parameter eta is updated via the Moller auxiliary
+variable method (Exchange Algorithm) with Propp-Wilson perfect simulation.
+Proposal SD for eta is adapted online using the Vihola (2012) RAM algorithm.
+Selection indicator gamma is updated with locally-balanced proposals
+(Zanella 2020) when \code{use_lb_gamma = TRUE}.
 }
 \examples{
 \dontrun{
@@ -253,6 +270,28 @@ fit1b <- bvs_pg(X, y,
 fit2 <- bvs_pg(X, y, adj_type = "ggm", sparse = TRUE, niter = 5000)
 }
 
+}
+\references{
+Polson NG, Scott JG, Windle J (2013). Bayesian inference for logistic
+  models using Polya-Gamma latent variables. \emph{JASA} 108(504),
+  1339--1349.
+
+  Moller J, Pettitt AN, Reeves R, Berthelsen KK (2006). An efficient MCMC
+  method for distributions with intractable normalising constants.
+  \emph{Biometrika} 93(2), 451--458.
+
+  Wang H (2012). Bayesian graphical lasso models and efficient posterior
+  computation. \emph{Bayesian Analysis} 7(4), 867--886.
+
+  Zanella G (2020). Informed proposals for local MCMC in discrete spaces.
+  \emph{JASA} 115(530), 852--865.
+
+  Vihola M (2012). Robust adaptive Metropolis algorithm with coerced
+  acceptance rate. \emph{Statistics and Computing} 22(5), 997--1008.
+
+  Vehtari A, Gelman A, Simpson D, Carpenter B, Burkner P-C (2021).
+  Rank-normalization, folding, and localization: An improved R-hat for
+  assessing convergence of MCMC. \emph{Bayesian Analysis} 16(2), 667--718.
 }
 \seealso{
 \code{\link{bvs_mh}}, \code{\link{summary.bvs}},

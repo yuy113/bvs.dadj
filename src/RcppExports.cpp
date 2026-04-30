@@ -12,8 +12,8 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 // BayesLogit_DualNet_FixedAdj
-Rcpp::List BayesLogit_DualNet_FixedAdj(const arma::mat& X, const arma::vec& y, Rcpp::IntegerMatrix R_dyn_int, Rcpp::IntegerMatrix R_fix_int, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e_eta, double f_eta, double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde, double eta2_tilde, unsigned int T_max, int proposal_type, int thin, int n_thin_gb, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, Rcpp::Nullable<Rcpp::NumericVector> event, std::string outcome_type, bool store_gamma, std::string alg_type, double hmc_step_size, int hmc_n_leapfrog, int nuts_max_treedepth, bool use_lb_gamma);
-RcppExport SEXP _BVS_DAdj_BayesLogit_DualNet_FixedAdj(SEXP XSEXP, SEXP ySEXP, SEXP R_dyn_intSEXP, SEXP R_fix_intSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP eta1_sdSEXP, SEXP eta2_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP eta2_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP n_thin_gbSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP eventSEXP, SEXP outcome_typeSEXP, SEXP store_gammaSEXP, SEXP alg_typeSEXP, SEXP hmc_step_sizeSEXP, SEXP hmc_n_leapfrogSEXP, SEXP nuts_max_treedepthSEXP, SEXP use_lb_gammaSEXP) {
+Rcpp::List BayesLogit_DualNet_FixedAdj(const arma::mat& X, const arma::vec& y, Rcpp::IntegerMatrix R_dyn_int, Rcpp::IntegerMatrix R_fix_int, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e_eta, double f_eta, double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde, double eta2_tilde, unsigned int T_max, int proposal_type, int thin, int n_thin_gb, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, Rcpp::Nullable<Rcpp::NumericVector> event, std::string outcome_type, bool store_gamma, std::string alg_type, double hmc_step_size, int hmc_n_leapfrog, int nuts_max_treedepth, bool use_lb_gamma, std::string imbalanced_link, double t_df, double t_scale, double zinb_r, double zinb_a_pi, double zinb_b_pi, double zinb_a_r, double zinb_b_r, bool zinb_estimate_r, bool use_cftp);
+RcppExport SEXP _BVS_DAdj_BayesLogit_DualNet_FixedAdj(SEXP XSEXP, SEXP ySEXP, SEXP R_dyn_intSEXP, SEXP R_fix_intSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP eta1_sdSEXP, SEXP eta2_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP eta2_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP n_thin_gbSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP eventSEXP, SEXP outcome_typeSEXP, SEXP store_gammaSEXP, SEXP alg_typeSEXP, SEXP hmc_step_sizeSEXP, SEXP hmc_n_leapfrogSEXP, SEXP nuts_max_treedepthSEXP, SEXP use_lb_gammaSEXP, SEXP imbalanced_linkSEXP, SEXP t_dfSEXP, SEXP t_scaleSEXP, SEXP zinb_rSEXP, SEXP zinb_a_piSEXP, SEXP zinb_b_piSEXP, SEXP zinb_a_rSEXP, SEXP zinb_b_rSEXP, SEXP zinb_estimate_rSEXP, SEXP use_cftpSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -55,13 +55,23 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type hmc_n_leapfrog(hmc_n_leapfrogSEXP);
     Rcpp::traits::input_parameter< int >::type nuts_max_treedepth(nuts_max_treedepthSEXP);
     Rcpp::traits::input_parameter< bool >::type use_lb_gamma(use_lb_gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(BayesLogit_DualNet_FixedAdj(X, y, R_dyn_int, R_fix_int, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e_eta, f_eta, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, T_max, proposal_type, thin, n_thin_gb, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, event, outcome_type, store_gamma, alg_type, hmc_step_size, hmc_n_leapfrog, nuts_max_treedepth, use_lb_gamma));
+    Rcpp::traits::input_parameter< std::string >::type imbalanced_link(imbalanced_linkSEXP);
+    Rcpp::traits::input_parameter< double >::type t_df(t_dfSEXP);
+    Rcpp::traits::input_parameter< double >::type t_scale(t_scaleSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_r(zinb_rSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_a_pi(zinb_a_piSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_b_pi(zinb_b_piSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_a_r(zinb_a_rSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_b_r(zinb_b_rSEXP);
+    Rcpp::traits::input_parameter< bool >::type zinb_estimate_r(zinb_estimate_rSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_cftp(use_cftpSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_DualNet_FixedAdj(X, y, R_dyn_int, R_fix_int, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e_eta, f_eta, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, T_max, proposal_type, thin, n_thin_gb, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, event, outcome_type, store_gamma, alg_type, hmc_step_size, hmc_n_leapfrog, nuts_max_treedepth, use_lb_gamma, imbalanced_link, t_df, t_scale, zinb_r, zinb_a_pi, zinb_b_pi, zinb_a_r, zinb_b_r, zinb_estimate_r, use_cftp));
     return rcpp_result_gen;
 END_RCPP
 }
 // BayesLogit_DualNet_GGM
-Rcpp::List BayesLogit_DualNet_GGM(const arma::mat& X, const arma::vec& y, const arma::mat& S_ggm, double n_ggm, const Rcpp::IntegerMatrix& R_fix_int, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm, double lambda_ggm, double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde, double eta2_tilde, double e_eta, double f_eta, unsigned int T_max, int proposal_type, int thin, int n_thin_gb, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, Rcpp::Nullable<Rcpp::NumericVector> event, std::string outcome_type, bool store_gamma, std::string alg_type, double hmc_step_size, int hmc_n_leapfrog, int nuts_max_treedepth, bool use_lb_gamma);
-RcppExport SEXP _BVS_DAdj_BayesLogit_DualNet_GGM(SEXP XSEXP, SEXP ySEXP, SEXP S_ggmSEXP, SEXP n_ggmSEXP, SEXP R_fix_intSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP n_mh_gammaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP lambda_ggmSEXP, SEXP eta1_sdSEXP, SEXP eta2_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP eta2_tildeSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP n_thin_gbSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP eventSEXP, SEXP outcome_typeSEXP, SEXP store_gammaSEXP, SEXP alg_typeSEXP, SEXP hmc_step_sizeSEXP, SEXP hmc_n_leapfrogSEXP, SEXP nuts_max_treedepthSEXP, SEXP use_lb_gammaSEXP) {
+Rcpp::List BayesLogit_DualNet_GGM(const arma::mat& X, const arma::vec& y, const arma::mat& S_ggm, double n_ggm, const Rcpp::IntegerMatrix& R_fix_int, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm, double lambda_ggm, double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde, double eta2_tilde, double e_eta, double f_eta, unsigned int T_max, int proposal_type, int thin, int n_thin_gb, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, Rcpp::Nullable<Rcpp::NumericVector> event, std::string outcome_type, bool store_gamma, std::string alg_type, double hmc_step_size, int hmc_n_leapfrog, int nuts_max_treedepth, bool use_lb_gamma, std::string imbalanced_link, double t_df, double t_scale, double zinb_r, double zinb_a_pi, double zinb_b_pi, double zinb_a_r, double zinb_b_r, bool zinb_estimate_r, bool use_cftp);
+RcppExport SEXP _BVS_DAdj_BayesLogit_DualNet_GGM(SEXP XSEXP, SEXP ySEXP, SEXP S_ggmSEXP, SEXP n_ggmSEXP, SEXP R_fix_intSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP n_mh_gammaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP lambda_ggmSEXP, SEXP eta1_sdSEXP, SEXP eta2_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP eta2_tildeSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP n_thin_gbSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP eventSEXP, SEXP outcome_typeSEXP, SEXP store_gammaSEXP, SEXP alg_typeSEXP, SEXP hmc_step_sizeSEXP, SEXP hmc_n_leapfrogSEXP, SEXP nuts_max_treedepthSEXP, SEXP use_lb_gammaSEXP, SEXP imbalanced_linkSEXP, SEXP t_dfSEXP, SEXP t_scaleSEXP, SEXP zinb_rSEXP, SEXP zinb_a_piSEXP, SEXP zinb_b_piSEXP, SEXP zinb_a_rSEXP, SEXP zinb_b_rSEXP, SEXP zinb_estimate_rSEXP, SEXP use_cftpSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -109,13 +119,23 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type hmc_n_leapfrog(hmc_n_leapfrogSEXP);
     Rcpp::traits::input_parameter< int >::type nuts_max_treedepth(nuts_max_treedepthSEXP);
     Rcpp::traits::input_parameter< bool >::type use_lb_gamma(use_lb_gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(BayesLogit_DualNet_GGM(X, y, S_ggm, n_ggm, R_fix_int, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, lambda_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e_eta, f_eta, T_max, proposal_type, thin, n_thin_gb, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, event, outcome_type, store_gamma, alg_type, hmc_step_size, hmc_n_leapfrog, nuts_max_treedepth, use_lb_gamma));
+    Rcpp::traits::input_parameter< std::string >::type imbalanced_link(imbalanced_linkSEXP);
+    Rcpp::traits::input_parameter< double >::type t_df(t_dfSEXP);
+    Rcpp::traits::input_parameter< double >::type t_scale(t_scaleSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_r(zinb_rSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_a_pi(zinb_a_piSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_b_pi(zinb_b_piSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_a_r(zinb_a_rSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_b_r(zinb_b_rSEXP);
+    Rcpp::traits::input_parameter< bool >::type zinb_estimate_r(zinb_estimate_rSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_cftp(use_cftpSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_DualNet_GGM(X, y, S_ggm, n_ggm, R_fix_int, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, lambda_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e_eta, f_eta, T_max, proposal_type, thin, n_thin_gb, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, event, outcome_type, store_gamma, alg_type, hmc_step_size, hmc_n_leapfrog, nuts_max_treedepth, use_lb_gamma, imbalanced_link, t_df, t_scale, zinb_r, zinb_a_pi, zinb_b_pi, zinb_a_r, zinb_b_r, zinb_estimate_r, use_cftp));
     return rcpp_result_gen;
 END_RCPP
 }
 // BayesLogit_DualNet_SparseGGM
-Rcpp::List BayesLogit_DualNet_SparseGGM(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, const Rcpp::IntegerVector& R_fix_i, const Rcpp::IntegerVector& R_fix_p_csc, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e_eta, double f_eta, double v0_ggm, double v1_ggm, double pii_ggm, double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde, double eta2_tilde, unsigned int T_max, int proposal_type, int n_mh_gamma, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip, Rcpp::Nullable<Rcpp::NumericVector> event, std::string outcome_type, std::string alg_type, double hmc_step_size, int hmc_n_leapfrog, int nuts_max_treedepth, bool use_lb_gamma);
-RcppExport SEXP _BVS_DAdj_BayesLogit_DualNet_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP R_fix_iSEXP, SEXP R_fix_p_cscSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta1_sdSEXP, SEXP eta2_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP eta2_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP n_mh_gammaSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP, SEXP eventSEXP, SEXP outcome_typeSEXP, SEXP alg_typeSEXP, SEXP hmc_step_sizeSEXP, SEXP hmc_n_leapfrogSEXP, SEXP nuts_max_treedepthSEXP, SEXP use_lb_gammaSEXP) {
+Rcpp::List BayesLogit_DualNet_SparseGGM(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, const Rcpp::IntegerVector& R_fix_i, const Rcpp::IntegerVector& R_fix_p_csc, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e_eta, double f_eta, double v0_ggm, double v1_ggm, double pii_ggm, double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde, double eta2_tilde, unsigned int T_max, int proposal_type, int n_mh_gamma, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip, Rcpp::Nullable<Rcpp::NumericVector> event, std::string outcome_type, std::string alg_type, double hmc_step_size, int hmc_n_leapfrog, int nuts_max_treedepth, bool use_lb_gamma, std::string imbalanced_link, double t_df, double t_scale, double zinb_r, double zinb_a_pi, double zinb_b_pi, double zinb_a_r, double zinb_b_r, bool zinb_estimate_r, bool use_sssl, double v0_sssl, double v1_sssl, bool use_cftp);
+RcppExport SEXP _BVS_DAdj_BayesLogit_DualNet_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP R_fix_iSEXP, SEXP R_fix_p_cscSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta1_sdSEXP, SEXP eta2_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP eta2_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP n_mh_gammaSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP, SEXP eventSEXP, SEXP outcome_typeSEXP, SEXP alg_typeSEXP, SEXP hmc_step_sizeSEXP, SEXP hmc_n_leapfrogSEXP, SEXP nuts_max_treedepthSEXP, SEXP use_lb_gammaSEXP, SEXP imbalanced_linkSEXP, SEXP t_dfSEXP, SEXP t_scaleSEXP, SEXP zinb_rSEXP, SEXP zinb_a_piSEXP, SEXP zinb_b_piSEXP, SEXP zinb_a_rSEXP, SEXP zinb_b_rSEXP, SEXP zinb_estimate_rSEXP, SEXP use_ssslSEXP, SEXP v0_ssslSEXP, SEXP v1_ssslSEXP, SEXP use_cftpSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -168,7 +188,20 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type hmc_n_leapfrog(hmc_n_leapfrogSEXP);
     Rcpp::traits::input_parameter< int >::type nuts_max_treedepth(nuts_max_treedepthSEXP);
     Rcpp::traits::input_parameter< bool >::type use_lb_gamma(use_lb_gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(BayesLogit_DualNet_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e_eta, f_eta, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, store_beta, store_gamma, store_Z_list, store_Z_pip, event, outcome_type, alg_type, hmc_step_size, hmc_n_leapfrog, nuts_max_treedepth, use_lb_gamma));
+    Rcpp::traits::input_parameter< std::string >::type imbalanced_link(imbalanced_linkSEXP);
+    Rcpp::traits::input_parameter< double >::type t_df(t_dfSEXP);
+    Rcpp::traits::input_parameter< double >::type t_scale(t_scaleSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_r(zinb_rSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_a_pi(zinb_a_piSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_b_pi(zinb_b_piSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_a_r(zinb_a_rSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_b_r(zinb_b_rSEXP);
+    Rcpp::traits::input_parameter< bool >::type zinb_estimate_r(zinb_estimate_rSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_sssl(use_ssslSEXP);
+    Rcpp::traits::input_parameter< double >::type v0_sssl(v0_ssslSEXP);
+    Rcpp::traits::input_parameter< double >::type v1_sssl(v1_ssslSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_cftp(use_cftpSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_DualNet_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e_eta, f_eta, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, store_beta, store_gamma, store_Z_list, store_Z_pip, event, outcome_type, alg_type, hmc_step_size, hmc_n_leapfrog, nuts_max_treedepth, use_lb_gamma, imbalanced_link, t_df, t_scale, zinb_r, zinb_a_pi, zinb_b_pi, zinb_a_r, zinb_b_r, zinb_estimate_r, use_sssl, v0_sssl, v1_sssl, use_cftp));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -237,8 +270,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // BayesLogit_PG_DualNet_SparseGGM
-Rcpp::List BayesLogit_PG_DualNet_SparseGGM(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, const Rcpp::IntegerVector& R_fix_i, const Rcpp::IntegerVector& R_fix_p_csc, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm, double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde, double eta2_tilde, double e_eta, double f_eta, unsigned int T_max, int proposal_type, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip, int block_size, int pcg_threshold, bool use_lb_gamma);
-RcppExport SEXP _BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP R_fix_iSEXP, SEXP R_fix_p_cscSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP n_mh_gammaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta1_sdSEXP, SEXP eta2_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP eta2_tildeSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP, SEXP block_sizeSEXP, SEXP pcg_thresholdSEXP, SEXP use_lb_gammaSEXP) {
+Rcpp::List BayesLogit_PG_DualNet_SparseGGM(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, const Rcpp::IntegerVector& R_fix_i, const Rcpp::IntegerVector& R_fix_p_csc, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm, double eta1_sd, double eta2_sd, double mu_tilde, double eta1_tilde, double eta2_tilde, double e_eta, double f_eta, unsigned int T_max, int proposal_type, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip, int block_size, int pcg_threshold, bool use_lb_gamma, bool use_sssl, double v0_sssl, double v1_sssl, bool use_cftp);
+RcppExport SEXP _BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP R_fix_iSEXP, SEXP R_fix_p_cscSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP n_mh_gammaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta1_sdSEXP, SEXP eta2_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP eta2_tildeSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP, SEXP block_sizeSEXP, SEXP pcg_thresholdSEXP, SEXP use_lb_gammaSEXP, SEXP use_ssslSEXP, SEXP v0_ssslSEXP, SEXP v1_ssslSEXP, SEXP use_cftpSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -287,7 +320,11 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type block_size(block_sizeSEXP);
     Rcpp::traits::input_parameter< int >::type pcg_threshold(pcg_thresholdSEXP);
     Rcpp::traits::input_parameter< bool >::type use_lb_gamma(use_lb_gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(BayesLogit_PG_DualNet_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, store_beta, store_gamma, store_Z_list, store_Z_pip, block_size, pcg_threshold, use_lb_gamma));
+    Rcpp::traits::input_parameter< bool >::type use_sssl(use_ssslSEXP);
+    Rcpp::traits::input_parameter< double >::type v0_sssl(v0_ssslSEXP);
+    Rcpp::traits::input_parameter< double >::type v1_sssl(v1_ssslSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_cftp(use_cftpSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_PG_DualNet_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, R_fix_i, R_fix_p_csc, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta1_sd, eta2_sd, mu_tilde, eta1_tilde, eta2_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, store_beta, store_gamma, store_Z_list, store_Z_pip, block_size, pcg_threshold, use_lb_gamma, use_sssl, v0_sssl, v1_sssl, use_cftp));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -462,8 +499,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // BayesLogit_PG_SingleAdj_SparseGGM
-Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm, double eta1_sd, double mu_tilde, double eta1_tilde, double e_eta, double f_eta, unsigned int T_max, int proposal_type, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip, int block_size, int pcg_threshold, bool use_lb_gamma);
-RcppExport SEXP _BVS_DAdj_BayesLogit_PG_SingleAdj_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP n_mh_gammaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta1_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP, SEXP block_sizeSEXP, SEXP pcg_thresholdSEXP, SEXP use_lb_gammaSEXP) {
+Rcpp::List BayesLogit_PG_SingleAdj_SparseGGM(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, int n_mh_gamma, double v0_ggm, double v1_ggm, double pii_ggm, double eta1_sd, double mu_tilde, double eta1_tilde, double e_eta, double f_eta, unsigned int T_max, int proposal_type, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip, int block_size, int pcg_threshold, bool use_lb_gamma, bool use_sssl, double v0_sssl, double v1_sssl, bool use_cftp);
+RcppExport SEXP _BVS_DAdj_BayesLogit_PG_SingleAdj_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP n_mh_gammaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta1_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP, SEXP block_sizeSEXP, SEXP pcg_thresholdSEXP, SEXP use_lb_gammaSEXP, SEXP use_ssslSEXP, SEXP v0_ssslSEXP, SEXP v1_ssslSEXP, SEXP use_cftpSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -508,13 +545,17 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type block_size(block_sizeSEXP);
     Rcpp::traits::input_parameter< int >::type pcg_threshold(pcg_thresholdSEXP);
     Rcpp::traits::input_parameter< bool >::type use_lb_gamma(use_lb_gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(BayesLogit_PG_SingleAdj_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta1_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, store_beta, store_gamma, store_Z_list, store_Z_pip, block_size, pcg_threshold, use_lb_gamma));
+    Rcpp::traits::input_parameter< bool >::type use_sssl(use_ssslSEXP);
+    Rcpp::traits::input_parameter< double >::type v0_sssl(v0_ssslSEXP);
+    Rcpp::traits::input_parameter< double >::type v1_sssl(v1_ssslSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_cftp(use_cftpSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_PG_SingleAdj_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, n_mh_gamma, v0_ggm, v1_ggm, pii_ggm, eta1_sd, mu_tilde, eta1_tilde, e_eta, f_eta, T_max, proposal_type, thin, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, store_beta, store_gamma, store_Z_list, store_Z_pip, block_size, pcg_threshold, use_lb_gamma, use_sssl, v0_sssl, v1_sssl, use_cftp));
     return rcpp_result_gen;
 END_RCPP
 }
 // BayesLogit_SingleNet_FixedAdj
-Rcpp::List BayesLogit_SingleNet_FixedAdj(const arma::mat& X, const arma::vec& y, Rcpp::IntegerMatrix R_fix_int, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e_eta, double f_eta, double eta1_sd, double mu_tilde, double eta1_tilde, unsigned int T_max, int proposal_type, int thin, int n_thin_gb, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, Rcpp::Nullable<Rcpp::NumericVector> event, std::string outcome_type, bool store_gamma, std::string alg_type, double hmc_step_size, int hmc_n_leapfrog, int nuts_max_treedepth, bool use_lb_gamma);
-RcppExport SEXP _BVS_DAdj_BayesLogit_SingleNet_FixedAdj(SEXP XSEXP, SEXP ySEXP, SEXP R_fix_intSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP eta1_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP n_thin_gbSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP eventSEXP, SEXP outcome_typeSEXP, SEXP store_gammaSEXP, SEXP alg_typeSEXP, SEXP hmc_step_sizeSEXP, SEXP hmc_n_leapfrogSEXP, SEXP nuts_max_treedepthSEXP, SEXP use_lb_gammaSEXP) {
+Rcpp::List BayesLogit_SingleNet_FixedAdj(const arma::mat& X, const arma::vec& y, Rcpp::IntegerMatrix R_fix_int, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e_eta, double f_eta, double eta1_sd, double mu_tilde, double eta1_tilde, unsigned int T_max, int proposal_type, int thin, int n_thin_gb, bool use_cftp, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, Rcpp::Nullable<Rcpp::NumericVector> event, std::string outcome_type, bool store_gamma, std::string alg_type, double hmc_step_size, int hmc_n_leapfrog, int nuts_max_treedepth, bool use_lb_gamma, std::string imbalanced_link, double t_df, double t_scale, double zinb_r, double zinb_a_pi, double zinb_b_pi, double zinb_a_r, double zinb_b_r, bool zinb_estimate_r);
+RcppExport SEXP _BVS_DAdj_BayesLogit_SingleNet_FixedAdj(SEXP XSEXP, SEXP ySEXP, SEXP R_fix_intSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP eta1_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP n_thin_gbSEXP, SEXP use_cftpSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP eventSEXP, SEXP outcome_typeSEXP, SEXP store_gammaSEXP, SEXP alg_typeSEXP, SEXP hmc_step_sizeSEXP, SEXP hmc_n_leapfrogSEXP, SEXP nuts_max_treedepthSEXP, SEXP use_lb_gammaSEXP, SEXP imbalanced_linkSEXP, SEXP t_dfSEXP, SEXP t_scaleSEXP, SEXP zinb_rSEXP, SEXP zinb_a_piSEXP, SEXP zinb_b_piSEXP, SEXP zinb_a_rSEXP, SEXP zinb_b_rSEXP, SEXP zinb_estimate_rSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -538,6 +579,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type proposal_type(proposal_typeSEXP);
     Rcpp::traits::input_parameter< int >::type thin(thinSEXP);
     Rcpp::traits::input_parameter< int >::type n_thin_gb(n_thin_gbSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_cftp(use_cftpSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type beta_in(beta_inSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::IntegerVector> >::type gamma_in(gamma_inSEXP);
     Rcpp::traits::input_parameter< double >::type alpha_in(alpha_inSEXP);
@@ -553,13 +595,22 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type hmc_n_leapfrog(hmc_n_leapfrogSEXP);
     Rcpp::traits::input_parameter< int >::type nuts_max_treedepth(nuts_max_treedepthSEXP);
     Rcpp::traits::input_parameter< bool >::type use_lb_gamma(use_lb_gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(BayesLogit_SingleNet_FixedAdj(X, y, R_fix_int, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e_eta, f_eta, eta1_sd, mu_tilde, eta1_tilde, T_max, proposal_type, thin, n_thin_gb, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, event, outcome_type, store_gamma, alg_type, hmc_step_size, hmc_n_leapfrog, nuts_max_treedepth, use_lb_gamma));
+    Rcpp::traits::input_parameter< std::string >::type imbalanced_link(imbalanced_linkSEXP);
+    Rcpp::traits::input_parameter< double >::type t_df(t_dfSEXP);
+    Rcpp::traits::input_parameter< double >::type t_scale(t_scaleSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_r(zinb_rSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_a_pi(zinb_a_piSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_b_pi(zinb_b_piSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_a_r(zinb_a_rSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_b_r(zinb_b_rSEXP);
+    Rcpp::traits::input_parameter< bool >::type zinb_estimate_r(zinb_estimate_rSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_SingleNet_FixedAdj(X, y, R_fix_int, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e_eta, f_eta, eta1_sd, mu_tilde, eta1_tilde, T_max, proposal_type, thin, n_thin_gb, use_cftp, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, event, outcome_type, store_gamma, alg_type, hmc_step_size, hmc_n_leapfrog, nuts_max_treedepth, use_lb_gamma, imbalanced_link, t_df, t_scale, zinb_r, zinb_a_pi, zinb_b_pi, zinb_a_r, zinb_b_r, zinb_estimate_r));
     return rcpp_result_gen;
 END_RCPP
 }
 // BayesLogit_SingleNet_GGM
-Rcpp::List BayesLogit_SingleNet_GGM(const arma::mat& X, const arma::vec& y, const arma::mat& S_ggm, double n_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e_eta, double f_eta, double v0_ggm, double v1_ggm, double pii_ggm, double lambda_ggm, double eta1_sd, double mu_tilde, double eta1_tilde, unsigned int T_max, int proposal_type, int thin, int n_thin_gb, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, Rcpp::Nullable<Rcpp::NumericVector> event, std::string outcome_type, bool store_gamma, std::string alg_type, double hmc_step_size, int hmc_n_leapfrog, int nuts_max_treedepth, bool use_lb_gamma);
-RcppExport SEXP _BVS_DAdj_BayesLogit_SingleNet_GGM(SEXP XSEXP, SEXP ySEXP, SEXP S_ggmSEXP, SEXP n_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP lambda_ggmSEXP, SEXP eta1_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP n_thin_gbSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP eventSEXP, SEXP outcome_typeSEXP, SEXP store_gammaSEXP, SEXP alg_typeSEXP, SEXP hmc_step_sizeSEXP, SEXP hmc_n_leapfrogSEXP, SEXP nuts_max_treedepthSEXP, SEXP use_lb_gammaSEXP) {
+Rcpp::List BayesLogit_SingleNet_GGM(const arma::mat& X, const arma::vec& y, const arma::mat& S_ggm, double n_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e_eta, double f_eta, double v0_ggm, double v1_ggm, double pii_ggm, double lambda_ggm, double eta1_sd, double mu_tilde, double eta1_tilde, unsigned int T_max, int proposal_type, int thin, int n_thin_gb, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, Rcpp::Nullable<Rcpp::NumericVector> event, std::string outcome_type, bool store_gamma, std::string alg_type, double hmc_step_size, int hmc_n_leapfrog, int nuts_max_treedepth, bool use_lb_gamma, std::string imbalanced_link, double t_df, double t_scale, double zinb_r, double zinb_a_pi, double zinb_b_pi, double zinb_a_r, double zinb_b_r, bool zinb_estimate_r, bool use_cftp);
+RcppExport SEXP _BVS_DAdj_BayesLogit_SingleNet_GGM(SEXP XSEXP, SEXP ySEXP, SEXP S_ggmSEXP, SEXP n_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP lambda_ggmSEXP, SEXP eta1_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP thinSEXP, SEXP n_thin_gbSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP eventSEXP, SEXP outcome_typeSEXP, SEXP store_gammaSEXP, SEXP alg_typeSEXP, SEXP hmc_step_sizeSEXP, SEXP hmc_n_leapfrogSEXP, SEXP nuts_max_treedepthSEXP, SEXP use_lb_gammaSEXP, SEXP imbalanced_linkSEXP, SEXP t_dfSEXP, SEXP t_scaleSEXP, SEXP zinb_rSEXP, SEXP zinb_a_piSEXP, SEXP zinb_b_piSEXP, SEXP zinb_a_rSEXP, SEXP zinb_b_rSEXP, SEXP zinb_estimate_rSEXP, SEXP use_cftpSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -603,13 +654,23 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type hmc_n_leapfrog(hmc_n_leapfrogSEXP);
     Rcpp::traits::input_parameter< int >::type nuts_max_treedepth(nuts_max_treedepthSEXP);
     Rcpp::traits::input_parameter< bool >::type use_lb_gamma(use_lb_gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(BayesLogit_SingleNet_GGM(X, y, S_ggm, n_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e_eta, f_eta, v0_ggm, v1_ggm, pii_ggm, lambda_ggm, eta1_sd, mu_tilde, eta1_tilde, T_max, proposal_type, thin, n_thin_gb, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, event, outcome_type, store_gamma, alg_type, hmc_step_size, hmc_n_leapfrog, nuts_max_treedepth, use_lb_gamma));
+    Rcpp::traits::input_parameter< std::string >::type imbalanced_link(imbalanced_linkSEXP);
+    Rcpp::traits::input_parameter< double >::type t_df(t_dfSEXP);
+    Rcpp::traits::input_parameter< double >::type t_scale(t_scaleSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_r(zinb_rSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_a_pi(zinb_a_piSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_b_pi(zinb_b_piSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_a_r(zinb_a_rSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_b_r(zinb_b_rSEXP);
+    Rcpp::traits::input_parameter< bool >::type zinb_estimate_r(zinb_estimate_rSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_cftp(use_cftpSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_SingleNet_GGM(X, y, S_ggm, n_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e_eta, f_eta, v0_ggm, v1_ggm, pii_ggm, lambda_ggm, eta1_sd, mu_tilde, eta1_tilde, T_max, proposal_type, thin, n_thin_gb, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, event, outcome_type, store_gamma, alg_type, hmc_step_size, hmc_n_leapfrog, nuts_max_treedepth, use_lb_gamma, imbalanced_link, t_df, t_scale, zinb_r, zinb_a_pi, zinb_b_pi, zinb_a_r, zinb_b_r, zinb_estimate_r, use_cftp));
     return rcpp_result_gen;
 END_RCPP
 }
 // BayesLogit_SingleNet_SparseGGM
-Rcpp::List BayesLogit_SingleNet_SparseGGM(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e_eta, double f_eta, double v0_ggm, double v1_ggm, double pii_ggm, double eta1_sd, double mu_tilde, double eta1_tilde, unsigned int T_max, int proposal_type, int n_mh_gamma, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip, Rcpp::Nullable<Rcpp::NumericVector> event, std::string outcome_type, std::string alg_type, double hmc_step_size, int hmc_n_leapfrog, int nuts_max_treedepth, bool use_lb_gamma);
-RcppExport SEXP _BVS_DAdj_BayesLogit_SingleNet_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta1_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP n_mh_gammaSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP, SEXP eventSEXP, SEXP outcome_typeSEXP, SEXP alg_typeSEXP, SEXP hmc_step_sizeSEXP, SEXP hmc_n_leapfrogSEXP, SEXP nuts_max_treedepthSEXP, SEXP use_lb_gammaSEXP) {
+Rcpp::List BayesLogit_SingleNet_SparseGGM(const arma::sp_mat& X, const arma::vec& y, const Rcpp::IntegerVector& S_i, const Rcpp::IntegerVector& S_p_csc, const Rcpp::NumericVector& S_x, const Rcpp::NumericVector& S_diag, int p_ggm, int niter, int burnin, double mu, double nu0, double sigmasq0, double alpha0, double beta0, double h, double e_eta, double f_eta, double v0_ggm, double v1_ggm, double pii_ggm, double eta1_sd, double mu_tilde, double eta1_tilde, unsigned int T_max, int proposal_type, int n_mh_gamma, int thin, Rcpp::Nullable<Rcpp::NumericVector> beta_in, Rcpp::Nullable<Rcpp::IntegerVector> gamma_in, double alpha_in, const arma::mat& Z_dat, double tau0, double htau, Rcpp::Nullable<Rcpp::NumericVector> tau_in, bool store_beta, bool store_gamma, bool store_Z_list, bool store_Z_pip, Rcpp::Nullable<Rcpp::NumericVector> event, std::string outcome_type, std::string alg_type, double hmc_step_size, int hmc_n_leapfrog, int nuts_max_treedepth, bool use_lb_gamma, std::string imbalanced_link, double t_df, double t_scale, double zinb_r, double zinb_a_pi, double zinb_b_pi, double zinb_a_r, double zinb_b_r, bool zinb_estimate_r, bool use_sssl, double v0_sssl, double v1_sssl, bool use_cftp);
+RcppExport SEXP _BVS_DAdj_BayesLogit_SingleNet_SparseGGM(SEXP XSEXP, SEXP ySEXP, SEXP S_iSEXP, SEXP S_p_cscSEXP, SEXP S_xSEXP, SEXP S_diagSEXP, SEXP p_ggmSEXP, SEXP niterSEXP, SEXP burninSEXP, SEXP muSEXP, SEXP nu0SEXP, SEXP sigmasq0SEXP, SEXP alpha0SEXP, SEXP beta0SEXP, SEXP hSEXP, SEXP e_etaSEXP, SEXP f_etaSEXP, SEXP v0_ggmSEXP, SEXP v1_ggmSEXP, SEXP pii_ggmSEXP, SEXP eta1_sdSEXP, SEXP mu_tildeSEXP, SEXP eta1_tildeSEXP, SEXP T_maxSEXP, SEXP proposal_typeSEXP, SEXP n_mh_gammaSEXP, SEXP thinSEXP, SEXP beta_inSEXP, SEXP gamma_inSEXP, SEXP alpha_inSEXP, SEXP Z_datSEXP, SEXP tau0SEXP, SEXP htauSEXP, SEXP tau_inSEXP, SEXP store_betaSEXP, SEXP store_gammaSEXP, SEXP store_Z_listSEXP, SEXP store_Z_pipSEXP, SEXP eventSEXP, SEXP outcome_typeSEXP, SEXP alg_typeSEXP, SEXP hmc_step_sizeSEXP, SEXP hmc_n_leapfrogSEXP, SEXP nuts_max_treedepthSEXP, SEXP use_lb_gammaSEXP, SEXP imbalanced_linkSEXP, SEXP t_dfSEXP, SEXP t_scaleSEXP, SEXP zinb_rSEXP, SEXP zinb_a_piSEXP, SEXP zinb_b_piSEXP, SEXP zinb_a_rSEXP, SEXP zinb_b_rSEXP, SEXP zinb_estimate_rSEXP, SEXP use_ssslSEXP, SEXP v0_ssslSEXP, SEXP v1_ssslSEXP, SEXP use_cftpSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -658,27 +719,40 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type hmc_n_leapfrog(hmc_n_leapfrogSEXP);
     Rcpp::traits::input_parameter< int >::type nuts_max_treedepth(nuts_max_treedepthSEXP);
     Rcpp::traits::input_parameter< bool >::type use_lb_gamma(use_lb_gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(BayesLogit_SingleNet_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e_eta, f_eta, v0_ggm, v1_ggm, pii_ggm, eta1_sd, mu_tilde, eta1_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, store_beta, store_gamma, store_Z_list, store_Z_pip, event, outcome_type, alg_type, hmc_step_size, hmc_n_leapfrog, nuts_max_treedepth, use_lb_gamma));
+    Rcpp::traits::input_parameter< std::string >::type imbalanced_link(imbalanced_linkSEXP);
+    Rcpp::traits::input_parameter< double >::type t_df(t_dfSEXP);
+    Rcpp::traits::input_parameter< double >::type t_scale(t_scaleSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_r(zinb_rSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_a_pi(zinb_a_piSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_b_pi(zinb_b_piSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_a_r(zinb_a_rSEXP);
+    Rcpp::traits::input_parameter< double >::type zinb_b_r(zinb_b_rSEXP);
+    Rcpp::traits::input_parameter< bool >::type zinb_estimate_r(zinb_estimate_rSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_sssl(use_ssslSEXP);
+    Rcpp::traits::input_parameter< double >::type v0_sssl(v0_ssslSEXP);
+    Rcpp::traits::input_parameter< double >::type v1_sssl(v1_ssslSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_cftp(use_cftpSEXP);
+    rcpp_result_gen = Rcpp::wrap(BayesLogit_SingleNet_SparseGGM(X, y, S_i, S_p_csc, S_x, S_diag, p_ggm, niter, burnin, mu, nu0, sigmasq0, alpha0, beta0, h, e_eta, f_eta, v0_ggm, v1_ggm, pii_ggm, eta1_sd, mu_tilde, eta1_tilde, T_max, proposal_type, n_mh_gamma, thin, beta_in, gamma_in, alpha_in, Z_dat, tau0, htau, tau_in, store_beta, store_gamma, store_Z_list, store_Z_pip, event, outcome_type, alg_type, hmc_step_size, hmc_n_leapfrog, nuts_max_treedepth, use_lb_gamma, imbalanced_link, t_df, t_scale, zinb_r, zinb_a_pi, zinb_b_pi, zinb_a_r, zinb_b_r, zinb_estimate_r, use_sssl, v0_sssl, v1_sssl, use_cftp));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_BVS_DAdj_BayesLogit_DualNet_FixedAdj", (DL_FUNC) &_BVS_DAdj_BayesLogit_DualNet_FixedAdj, 38},
-    {"_BVS_DAdj_BayesLogit_DualNet_GGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_DualNet_GGM, 44},
-    {"_BVS_DAdj_BayesLogit_DualNet_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_DualNet_SparseGGM, 49},
+    {"_BVS_DAdj_BayesLogit_DualNet_FixedAdj", (DL_FUNC) &_BVS_DAdj_BayesLogit_DualNet_FixedAdj, 48},
+    {"_BVS_DAdj_BayesLogit_DualNet_GGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_DualNet_GGM, 54},
+    {"_BVS_DAdj_BayesLogit_DualNet_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_DualNet_SparseGGM, 62},
     {"_BVS_DAdj_phase_transit_2eta_fixadj", (DL_FUNC) &_BVS_DAdj_phase_transit_2eta_fixadj, 8},
     {"_BVS_DAdj_BayesLogit_PG_DualAdj", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_DualAdj, 36},
-    {"_BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM, 45},
+    {"_BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_DualNet_SparseGGM, 49},
     {"_BVS_DAdj_phase_transit_2eta", (DL_FUNC) &_BVS_DAdj_phase_transit_2eta, 8},
     {"_BVS_DAdj_BayesLogit_PG_GGM_Moller", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_GGM_Moller, 38},
     {"_BVS_DAdj_BayesLogit_PG_SingleAdj", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_SingleAdj, 32},
     {"_BVS_DAdj_phase_transit_1eta", (DL_FUNC) &_BVS_DAdj_phase_transit_1eta, 7},
     {"_BVS_DAdj_BayesLogit_PG_SingleAdj_GGM_Moller", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_SingleAdj_GGM_Moller, 35},
-    {"_BVS_DAdj_BayesLogit_PG_SingleAdj_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_SingleAdj_SparseGGM, 41},
-    {"_BVS_DAdj_BayesLogit_SingleNet_FixedAdj", (DL_FUNC) &_BVS_DAdj_BayesLogit_SingleNet_FixedAdj, 35},
-    {"_BVS_DAdj_BayesLogit_SingleNet_GGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_SingleNet_GGM, 40},
-    {"_BVS_DAdj_BayesLogit_SingleNet_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_SingleNet_SparseGGM, 45},
+    {"_BVS_DAdj_BayesLogit_PG_SingleAdj_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_PG_SingleAdj_SparseGGM, 45},
+    {"_BVS_DAdj_BayesLogit_SingleNet_FixedAdj", (DL_FUNC) &_BVS_DAdj_BayesLogit_SingleNet_FixedAdj, 45},
+    {"_BVS_DAdj_BayesLogit_SingleNet_GGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_SingleNet_GGM, 50},
+    {"_BVS_DAdj_BayesLogit_SingleNet_SparseGGM", (DL_FUNC) &_BVS_DAdj_BayesLogit_SingleNet_SparseGGM, 58},
     {NULL, NULL, 0}
 };
 

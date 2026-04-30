@@ -8,10 +8,11 @@ abstract: >
   We introduce **BVS.DAdj**, an R package for Bayesian variable selection in
   generalized regression models using Markov random field (MRF) priors that
   incorporate dual adjacency structures among predictors. The package provides
-  two MCMC interfaces---`bvs_mh()` and `bvs_pg()`---covering four outcome
+  two MCMC interfaces---`bvs_mh()` and `bvs_pg()`---covering six outcome
   types (binary logistic, continuous Gaussian, right-censored time-to-event
-  via Cox partial likelihood, and overdispersed count via a negative-binomial
-  representation) and six adjacency specifications (fixed, dual-fixed,
+  via Cox partial likelihood, overdispersed count via a negative-binomial
+  representation, zero-inflated count via a point-mass mixture, and
+  imbalanced binary) and six adjacency specifications (fixed, dual-fixed,
   graphical lasso, Bayesian GGM, and combined GGM-plus-fixed). Within
   `bvs_mh()`, Metropolis-Hastings (MH), Hamiltonian Monte Carlo (HMC), and
   No-U-Turn Sampling (NUTS) are available for non-conjugate binary and
@@ -118,9 +119,10 @@ via the Möller auxiliary variable approach [@MB2006].
 
 1. A unified R interface (`bvs_mh` and `bvs_pg`) dispatching to 12
    optimized C++ backends via **Rcpp**/**RcppArmadillo**.
-2. Support for *four* outcome types: binary logistic, continuous Gaussian,
-   right-censored time-to-event (Cox partial likelihood), and overdispersed
-   count (negative-binomial via Pólya-Gamma augmentation).
+2. Support for *six* outcome types: binary logistic, continuous Gaussian,
+   right-censored time-to-event (Cox partial likelihood), overdispersed
+   count (negative-binomial via Poisson-Gamma augmentation), zero-inflated
+   count (ZIC), and imbalanced binary.
 3. Three within-model samplers for non-conjugate parameter blocks:
    random-walk MH, HMC [@Neal2011], and NUTS [@Hoffman2014].
 4. *Six* adjacency specifications covering fixed, data-driven (graphical
@@ -205,6 +207,22 @@ $$
 where $r > 0$ is the dispersion parameter. Marginalizing over $w_i$ gives
 a negative-binomial distribution for $y_i$ with mean $e^{\eta_i}$ and
 variance $e^{\eta_i}(1 + e^{\eta_i}/r)$.
+
+**Zero-inflated count outcome** (`outcome_type = "ZIC"`)
+
+Introduces a structural zero component via probability $\pi$:
+
+$$
+Z_i \sim \mathrm{Bernoulli}(\pi), \quad
+y_i \mid Z_i=1 \sim \delta_{0}(y), \quad
+y_i \mid Z_i=0, w_i, \eta_i \sim \mathrm{Poisson}(w_i e^{\eta_i}),
+$$
+
+with $w_i \sim \mathrm{Gamma}(r, r)$, $\pi \sim \mathrm{Beta}(a_\pi, b_\pi)$, and optionally $r \sim \mathrm{Gamma}(a_r, b_r)$ [@Lambert1992; @GhoshZINB2006].
+
+**Imbalanced binary outcome** (`outcome_type = "imbalanced_binary"`)
+
+Robust models for imbalanced data, offering either a `logit_t` link (Student-t prior on coefficients via local adaptive variance $\lambda_j \sim \mathrm{IG}(df/2, df/2)$; @Gelman2008) or a `cloglog` link addressing class asymmetry via the complementary log-log link [@KingZeng2001].
 
 ## Spike-and-slab prior on regression coefficients {#sec-spikeslab}
 

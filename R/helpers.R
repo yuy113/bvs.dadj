@@ -36,25 +36,22 @@ prepare_sparse_S <- function(X, threshold = 1e-4) {
   diag(S_thr) <- 0
   S_thr[abs(S_thr) < threshold] <- 0
 
-  # Upper triangle (column-major) -> CSC
-  S_upper <- S_thr
-  S_upper[lower.tri(S_upper)] <- 0
-
-  sm <- Matrix::sparseMatrix(
-    i = which(S_upper != 0, arr.ind = TRUE)[, 1],
-    j = which(S_upper != 0, arr.ind = TRUE)[, 2],
-    x = S_upper[S_upper != 0],
-    dims = c(p, p)
-  )
-
-  sm_summary <- Matrix::summary(sm)
-  S_csc <- as(sm, "CsparseMatrix")
+  # R2-FIX: keep BOTH triangles (symmetric S) so the C++ sparse-S iterators
+  # find each edge from either column. Earlier code stored upper triangle
+  # only, which broke the GGM column sweep when a user passed the result of
+  # prepare_sparse_S() back via S_ggm = ... (the internal triplet helper
+  # accepts a pre-decomposed list verbatim and does NOT re-symmetrise).
+  # Note: Matrix::Matrix(., sparse=TRUE) auto-detects symmetry and returns a
+  # dsCMatrix (upper triangle only). Force a general dgCMatrix so both
+  # triangles are stored explicitly.
+  S_off <- methods::as(methods::as(S_thr, "dgCMatrix"), "CsparseMatrix")
+  S_off <- Matrix::drop0(S_off)
 
   list(
-    S_i    = as.integer(S_csc@i), # 0-based row indices
-    S_p    = as.integer(S_csc@p), # 0-based col pointers
-    S_x    = as.double(S_csc@x), # nonzero values
-    S_diag = as.double(S_diag), # diagonal
+    S_i    = as.integer(S_off@i), # 0-based row indices
+    S_p    = as.integer(S_off@p), # 0-based col pointers
+    S_x    = as.double(S_off@x),  # nonzero values (both triangles)
+    S_diag = as.double(S_diag),   # diagonal
     p      = as.integer(p)
   )
 }

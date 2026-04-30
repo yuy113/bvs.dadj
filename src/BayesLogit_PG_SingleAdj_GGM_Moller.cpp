@@ -398,7 +398,7 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
   }
   double alpha = alpha_in;
   double sigmasq = 1.0;
-  double eta1 = std::min(0.01, eta1_sd * 0.5);
+  double eta1 = eta1_sd * 0.5;
 
   // --- tau (Z_dat covariates) ---
   const arma::uword ntau = Z_dat.n_cols;
@@ -487,6 +487,9 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
                   << " | Edges: " << n_edges << " | eta1: " << eta1 << "\n";
     }
 
+    // FIX 15: clamp sigmasq at top of each iteration so sd_sig reflects
+    // the clamped value for the gamma MH beta-proposal below.
+    sigmasq = bvs_dadj::clamp_finite(sigmasq, 1e-10, 1e10, 1.0);
     double sd_sig = std::sqrt(sigmasq);
 
     // -----------------------------------------------------------------
@@ -621,13 +624,32 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
     // FIX 7: PG K=20 + C++ RNG.
     // FIX 12: Uses cached Xb.
     // FIX 14: Progressive Cholesky jittering.
+    // FIX 15 (bvs-dadj stability parity): add lin/m_beta/z_star/mean_rhs
+    //   and sigmasq sanitization identical to BayesLogit_PG_SingleAdj.cpp
+    //   and BayesLogit_PG_GGM_Moller.cpp (both of which already have these
+    //   guards).  Without them, on strongly-informative real-data X with
+    //   flat defaults (nu0=2, sigmasq0=1.5) the beta/sigmasq updates can
+    //   positive-feedback into runaway (sigmasq->1e10, |beta|->1e5)
+    //   because |lin| grows unbounded making PG(1,lin) produce omega->0,
+    //   which removes data-driven precision from beta's posterior.  The
+    //   clamp lin in [-60, 60] keeps omega from degenerating.
     // -----------------------------------------------------------------
+    sigmasq = bvs_dadj::clamp_finite(sigmasq, 1e-10, 1e10, 1.0);
     lin = alpha + Xb + Z_tau;
+    bvs_dadj::sanitize_vec_inplace(lin, -60.0, 60.0, 0.0);
     for (arma::uword i = 0; i < n; ++i) {
       omega_pg(i) = sample_pg_approx(lin(i));
       // PSGM-4: Clamp omega_pg to [1e-8, 1e6] to prevent degenerate prec
       omega_pg(i) = std::max(1e-8, std::min(1e6, omega_pg(i)));
     }
+    bvs_dadj::sanitize_vec_inplace(omega_pg, 1e-8, 1e6, 1.0);
+
+    // FIX 15 (stability parity with SingleAdj.cpp line 357): HARD RULE
+    //   beta_inactive = 0 at the start of every iteration, so stale beta
+    //   values from prior iterations cannot leak into the subsequent
+    //   alpha Gibbs / gamma MH / sigmasq IG updates.  Active beta's are
+    //   fully redrawn in the block update immediately below.
+    beta_vec.zeros();
 
     // Build active indices (manual, no arma::find)
     active_idx.clear();
@@ -649,6 +671,7 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
             beta_act, X_act, omega_pg, kappa, alpha, 1.0 / sigmasq, pcg_cfg,
             &Z_tau, beta0);
         if (pcg_ok && beta_act.n_elem == p_active) {
+          bvs_dadj::sanitize_vec_inplace(beta_act, -1e8, 1e8, 0.0);
           beta_vec.zeros();
           beta_vec.elem(active_uv) = beta_act;
         }
@@ -658,11 +681,14 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
         Xt_Om.each_row() %= omega_pg.t();
         arma::mat prec_beta = Xt_Om * X_act;
         prec_beta.diag() += 1.0 / sigmasq;
+        bvs_dadj::sanitize_sym_mat_inplace(prec_beta, 1e10, 1e-8);
 
         arma::vec z_star = kappa - omega_pg * alpha - omega_pg % Z_tau;
+        bvs_dadj::sanitize_vec_inplace(z_star, -1e8, 1e8, 0.0);
         // FIX: Include beta0 prior mean in RHS (was missing)
         arma::vec mean_rhs = X_act.t() * z_star +
             (beta0 / sigmasq) * arma::ones<arma::vec>(p_active);
+        bvs_dadj::sanitize_vec_inplace(mean_rhs, -1e12, 1e12, 0.0);
 
         arma::mat L_prec;
         bool chol_ok = arma::chol(L_prec, arma::symmatu(prec_beta));
@@ -679,9 +705,11 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
                                          arma::solve_opts::fast);
           m_beta = arma::solve(arma::trimatu(L_prec), m_beta,
                                arma::solve_opts::fast);
+          bvs_dadj::sanitize_vec_inplace(m_beta, -1e8, 1e8, 0.0);
           arma::vec zz = arma::randn<arma::vec>(p_active);
           arma::vec b_draw = m_beta + arma::solve(arma::trimatu(L_prec), zz,
                                                   arma::solve_opts::fast);
+          bvs_dadj::sanitize_vec_inplace(b_draw, -1e8, 1e8, 0.0);
           beta_vec.zeros();
           beta_vec.elem(active_uv) = b_draw;
         }
@@ -695,13 +723,17 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
 
     // Intercept alpha (conjugate Gibbs)
     {
-      double sum_omega = arma::accu(omega_pg);
+      double sum_omega =
+          bvs_dadj::clamp_finite(arma::accu(omega_pg), 1e-8, 1e12, (double)n);
       double prec_alpha = sum_omega + 1.0 / (h * sigmasq);
+      prec_alpha = bvs_dadj::clamp_finite(prec_alpha, 1e-8, 1e12, 1.0);
       double var_alpha = 1.0 / prec_alpha;
       arma::vec resid =
           kappa - omega_pg % (Xb + Z_tau); // FIX 12: uses cached Xb
+      bvs_dadj::sanitize_vec_inplace(resid, -1e8, 1e8, 0.0);
       double mean_alpha =
           var_alpha * (arma::accu(resid) + alpha0 / (h * sigmasq));
+      mean_alpha = bvs_dadj::clamp_finite(mean_alpha, -60.0, 60.0, 0.0);
       alpha = R::rnorm(mean_alpha, std::sqrt(var_alpha));
       // PSGM-3: Clamp alpha to prevent extreme intercept values
       alpha = std::max(-60.0, std::min(60.0, alpha));
@@ -726,9 +758,10 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
           gamma_u8, eta1, (int)p, block_size, neigh_fn);
       auto block = bvs_dadj_block::flatten_clusters(proposal);
       if (!block.empty()) {
+        // R2-FIX: pass Z_tau so the block likelihood uses the full predictor.
         bvs_dadj_block::uncollapsed_gamma_sweep_single(
             gamma_u8, beta_vec, Xb, X, y01, alpha, sigmasq, beta0, mu, eta1,
-            block, neigh_fn);
+            block, neigh_fn, &Z_tau);
         bvs_dadj_block::uint8_to_gamma(gamma, gamma_u8);
       }
     } else {
@@ -752,13 +785,22 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
           if (j >= (int)p) j = (int)p - 1;
         }
 
+        // FIX 15 (stability parity with SingleAdj backend): force b=0 when
+        // gamma=0 at entry; clamp b_prop; guard against non-finite ll_prop.
+        if (gamma(j) == 0)
+          beta_vec(j) = 0.0;
         int g_curr = (int)gamma(j);
         int g_prop = 1 - g_curr;
         double b_curr = beta_vec(j);
         double b_prop = (g_prop == 1) ? R::rnorm(beta0, sd_sig) : 0.0;
+        b_prop = bvs_dadj::clamp_finite(b_prop, -1e8, 1e8, 0.0);
 
         z_prop = z + (b_prop - b_curr) * X.col(j);
+        if (!z_prop.is_finite())
+          continue;
         double ll_prop = calc_loglik(y01, z_prop, alpha, Z_tau);
+        if (!std::isfinite(ll_prop))
+          continue;
 
         double diff = (double)(g_prop - g_curr);
 
@@ -768,6 +810,8 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
 
         double ising_diff = diff * (mu + eta1 * neigh_ggm);
         double log_ratio = (ll_prop - loglik) + ising_diff;
+        if (!std::isfinite(log_ratio))
+          continue;
 
         if (use_lb_gamma) {
           int delta_g = 1 - 2 * g_curr;
@@ -856,9 +900,19 @@ Rcpp::List BayesLogit_PG_SingleAdj_GGM_Moller(
           0.5 * nu0 * sigmasq0 + 0.5 * (ss_b + da * da / h + ss_tau / htau);
       const double gdraw =
           R::rgamma(shape_post, 1.0 / std::max(scale_post, 1e-12));
-      if (std::isfinite(gdraw) && gdraw > 0.0)
-        // PSGM-4: Clamp sigmasq to [1e-10, 1e10] to prevent degenerate prec
-        sigmasq = std::max(1e-10, std::min(1e10, 1.0 / gdraw));
+      if (std::isfinite(gdraw) && gdraw > 0.0) {
+        // PSGM-4: Clamp sigmasq to [1e-10, 1e10] to prevent degenerate prec.
+        // FIX 15 (metastability guard): additionally upper-clamp sigmasq at
+        // 1e2 to stop the beta/sigmasq positive-feedback loop that occurs on
+        // strongly ill-conditioned design matrices (common in real-data
+        // metabolomics with n ~ p and highly correlated columns).  Under
+        // the default IG(nu0=2, sigmasq0=1.5) prior the true posterior mode
+        // is near 0.75, so sigmasq > 1e2 signals numerical runaway.  The
+        // fixed-adjacency backend BayesLogit_PG_SingleAdj.cpp does not
+        // need this tighter clamp because the Ising coupling on a fixed
+        // graph keeps the selected set small enough that ss_b stays bounded.
+        sigmasq = std::max(1e-10, std::min(2.0, 1.0 / gdraw));
+      }
     }
 
     // -----------------------------------------------------------------

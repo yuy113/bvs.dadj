@@ -192,11 +192,14 @@ summary.bvs <- function(object, pip_threshold = 0.5,
     nselected = length(selected),
     sampler = object$sampler,
     adj_type = object$adj_type,
+    outcome_type = object$outcome_type,
     p = object$p,
     n = object$n,
     niter = object$niter,
     cred_level = cred_level,
-    hpd_level = hpd_level
+    hpd_level = hpd_level,
+    zinb_pi = object$zinb_pi,
+    zinb_r_final = object$zinb_r_final
   )
   class(out) <- "summary.bvs"
   out
@@ -221,6 +224,14 @@ print.summary.bvs <- function(x, ...) {
   if (!is.null(x$tau_summary)) {
     cat("\nAdditional covariate coefficients (tau):\n")
     print(x$tau_summary, row.names = FALSE)
+  }
+
+  if (!is.null(x$zinb_pi) || !is.null(x$zinb_r_final)) {
+    cat("\nZero-Inflated Count (ZIC) Parameters:\n")
+    if (!is.null(x$zinb_pi))
+      cat("  Estimated pi (zero-inflation prob):", round(x$zinb_pi, 4), "\n")
+    if (!is.null(x$zinb_r_final))
+      cat("  Final r (NB dispersion):           ", round(x$zinb_r_final, 4), "\n")
   }
 
   if (x$nselected > 0) {
@@ -510,16 +521,22 @@ bvs_gelman_diag <- function(fits, vars = NULL, ...) {
 #'   16(2), 667--718. DOI: 10.1214/20-BA1221.
 #' @export
 bvs_rhat <- function(x) {
-  if (requireNamespace("posterior", quietly = TRUE)) {
-    if (is.matrix(x)) {
-      return(posterior::rhat(posterior::rvar(t(x))))
-    }
-    return(posterior::rhat(posterior::rvar(matrix(x, ncol = 1))))
-  }
   x_mat <- .ensure_matrix(x)
-  bulk <- .rhat_basic(.z_scale(.split_chains(x_mat)))
-  tail <- .rhat_basic(.z_scale(.split_chains(.fold_draws(x_mat))))
-  max(bulk, tail)
+  fallback <- function() {
+    bulk <- .rhat_basic(.z_scale(.split_chains(x_mat)))
+    tail <- .rhat_basic(.z_scale(.split_chains(.fold_draws(x_mat))))
+    max(bulk, tail)
+  }
+  if (requireNamespace("posterior", quietly = TRUE)) {
+    out <- tryCatch(
+      posterior::rhat(posterior::as_draws_matrix(x_mat)),
+      error = function(e) NA_real_
+    )
+    if (length(out) == 1L && is.finite(out)) {
+      return(as.numeric(out))
+    }
+  }
+  fallback()
 }
 
 #' Bulk Effective Sample Size
@@ -546,14 +563,21 @@ bvs_rhat <- function(x) {
 #'   16(2), 667--718. DOI: 10.1214/20-BA1221.
 #' @export
 bvs_ess_bulk <- function(x) {
-  if (requireNamespace("posterior", quietly = TRUE)) {
-    if (is.matrix(x)) {
-      return(posterior::ess_bulk(posterior::rvar(t(x))))
-    }
-    return(posterior::ess_bulk(posterior::rvar(matrix(x, ncol = 1))))
+  x_mat <- .ensure_matrix(x)
+  fallback <- function() {
+    z <- .z_scale(.split_chains(x_mat))
+    .ess_multi_chain(z)
   }
-  z <- .z_scale(.split_chains(.ensure_matrix(x)))
-  .ess_multi_chain(z)
+  if (requireNamespace("posterior", quietly = TRUE)) {
+    out <- tryCatch(
+      posterior::ess_bulk(posterior::as_draws_matrix(x_mat)),
+      error = function(e) NA_real_
+    )
+    if (length(out) == 1L && is.finite(out)) {
+      return(as.numeric(out))
+    }
+  }
+  fallback()
 }
 
 #' Tail Effective Sample Size
@@ -581,17 +605,22 @@ bvs_ess_bulk <- function(x) {
 #'   16(2), 667--718. DOI: 10.1214/20-BA1221.
 #' @export
 bvs_ess_tail <- function(x) {
-  if (requireNamespace("posterior", quietly = TRUE)) {
-    if (is.matrix(x)) {
-      return(posterior::ess_tail(posterior::rvar(t(x))))
-    }
-    return(posterior::ess_tail(posterior::rvar(matrix(x, ncol = 1))))
-  }
   x_mat <- .ensure_matrix(x)
-  # quantile ESS at 5th and 95th percentiles
-  q05 <- .ess_quantile(x_mat, 0.05)
-  q95 <- .ess_quantile(x_mat, 0.95)
-  min(q05, q95)
+  fallback <- function() {
+    q05 <- .ess_quantile(x_mat, 0.05)
+    q95 <- .ess_quantile(x_mat, 0.95)
+    min(q05, q95)
+  }
+  if (requireNamespace("posterior", quietly = TRUE)) {
+    out <- tryCatch(
+      posterior::ess_tail(posterior::as_draws_matrix(x_mat)),
+      error = function(e) NA_real_
+    )
+    if (length(out) == 1L && is.finite(out)) {
+      return(as.numeric(out))
+    }
+  }
+  fallback()
 }
 
 # --- Internal helpers for Vehtari et al. (2021) diagnostics ---
@@ -663,8 +692,13 @@ bvs_ess_tail <- function(x) {
   W <- mean(chain_vars)
   if (W < .Machine$double.eps) return(as.numeric(n * m))
 
-  # Combined autocorrelation across chains
-  max_lag <- n - 1
+  # R2-FIX: cap max_lag at min(n-1, max(20, floor(n/2)), 1000). Previous
+  # max_lag = n - 1 made stats::acf O(n^2), which is wasted work for long
+  # chains -- Geyer's IPS truncates the positive-pair sum well before the
+  # tail, so high lags contribute nothing but cost. Cap matches the
+  # posterior package's practical default.
+  max_lag <- min(n - 1L, max(20L, n %/% 2L), 1000L)
+  max_lag <- as.integer(max_lag)
   acf_sum <- numeric(max_lag)
   for (j in seq_len(m)) {
     chain_centered <- x_mat[, j] - chain_means[j]

@@ -21,7 +21,11 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
     Rcpp::Nullable<Rcpp::NumericVector> tau_in = R_NilValue,
     bool store_beta = true, bool store_gamma = true, bool store_Z_list = false,
     bool store_Z_pip = true, int block_size = 1, int pcg_threshold = 500,
-    bool use_lb_gamma = true) {
+    bool use_lb_gamma = true,
+    bool use_sssl = false,
+    double v0_sssl = 0.01,
+    double v1_sssl = 1.0,
+    bool use_cftp = false) {
   Rcpp::RNGScope scope;
 
   const int n = static_cast<int>(X.n_rows);
@@ -73,8 +77,8 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
 
   double alpha = alpha_in;
   double sigmasq = 1.0;
-  double eta1 = std::min(0.01, eta1_sd * 0.5);
-  double eta2 = std::min(0.01, eta2_sd * 0.5);
+  double eta1 = eta1_sd * 0.5;
+  double eta2 = eta2_sd * 0.5;
 
   // --- tau (Z_dat covariates) ---
   const arma::uword ntau = Z_dat.n_cols;
@@ -163,8 +167,14 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
     sigmasq = clamp_scalar(sigmasq, SIGMASQ_MIN, SIGMASQ_MAX);
     const double sd_sig = std::sqrt(sigmasq);
 
-    ggm_column_sweep_sparse(S, Z_active_flag, p, log_pii, log_1pii, lv0h, lv1h,
-                            iv0, iv1, A_sub, s_ggm, noise_ggm, n_edges);
+    if (use_sssl) {
+      ggm_column_sweep_sparse_sssl(S, Z_active_flag, p, log_pii, log_1pii,
+                                   v0_sssl, v1_sssl, A_sub, s_ggm, noise_ggm,
+                                   n_edges);
+    } else {
+      ggm_column_sweep_sparse(S, Z_active_flag, p, log_pii, log_1pii, lv0h,
+                              lv1h, iv0, iv1, A_sub, s_ggm, noise_ggm, n_edges);
+    }
 
     {
       for (int i = 0; i < n; ++i) {
@@ -284,13 +294,20 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
           cb(R_fix.row_idx[idx]);
         }
       };
+      // R2-FIX: argument order had been (gamma, p, eta1, eta2, ...) which the
+      // compiler silently accepted via int↔double conversions. The intended
+      // signature is (gamma, eta1, eta2, p, block_size, ...) — passing p as
+      // eta1 made the bond probability ~1 and truncated p to (int)eta2 == 0,
+      // which made the SW step a complete no-op for sparse dual GGM.
       auto clusters = bvs_dadj_block::swendsen_wang_dual(
-          gamma, p, eta1, eta2, block_size, neigh_dyn_fn, neigh_fix_fn);
+          gamma, eta1, eta2, (int)p, block_size, neigh_dyn_fn, neigh_fix_fn);
       auto flat = bvs_dadj_block::flatten_clusters(clusters);
 
+      // R2-FIX: pass Z_tau through so the block likelihood ratio uses the
+      // full linear predictor alpha + X*beta + Z*tau (not just alpha + X*beta).
       bvs_dadj_block::uncollapsed_gamma_sweep_dual_sparse(
           gamma, beta_vec, Xb, X, y01, alpha, sigmasq, beta0, mu, eta1, eta2,
-          flat, neigh_dyn_fn, neigh_fix_fn);
+          flat, neigh_dyn_fn, neigh_fix_fn, &Z_tau);
 
       // Rebuild active_idx / active_pos from scratch
       active_idx.clear();
@@ -429,7 +446,7 @@ Rcpp::List BayesLogit_PG_DualNet_SparseGGM(
         S, R_fix, Z_active_flag, p, mu, eta1, eta2, eta1_sd, eta2_sd, mu_tilde,
         eta1_tilde, eta2_tilde, gamma, e_eta, f_eta, T_max, proposal_type,
         pw_up, pw_dn, pw_om1, pw_om2, pw_om1n, pw_om2n,
-        eta1_adapter, eta2_adapter);
+        eta1_adapter, eta2_adapter, use_cftp);
 
     maybe_store_sparse_state(
         iter, burnin, thin, n_save, store_beta, store_gamma, store_Z_list,

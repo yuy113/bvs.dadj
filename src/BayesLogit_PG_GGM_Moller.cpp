@@ -384,8 +384,8 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
 
   double alpha = alpha_in;
   double sigmasq = 1.0;
-  double eta1 = std::min(0.01, eta1_sd * 0.5); // initial eta for R_dyn
-  double eta2 = std::min(0.01, eta2_sd * 0.5); // initial eta for R_fix
+  double eta1 = eta1_sd * 0.5; // initial eta for R_dyn
+  double eta2 = eta2_sd * 0.5; // initial eta for R_fix
 
   // --- tau (Z_dat covariates) ---
   const arma::uword ntau = Z_dat.n_cols;
@@ -705,9 +705,10 @@ Rcpp::List BayesLogit_PG_GGM_Moller(
       auto block = bvs_dadj_block::flatten_clusters(proposal);
       if (!block.empty()) {
         z = X * beta;
+        // R2-FIX: pass Z_tau so the block likelihood uses the full predictor.
         bvs_dadj_block::uncollapsed_gamma_sweep_dual(
             gamma_u8, beta, z, X, y, alpha, sigmasq, beta0, mu, eta1, eta2,
-            block, neigh_dyn_fn, neigh_fix_fn);
+            block, neigh_dyn_fn, neigh_fix_fn, &Z_tau);
         bvs_dadj_block::uint8_to_gamma(gamma, gamma_u8);
       }
     } else {

@@ -2,14 +2,23 @@
 
 **Bayesian Variable Selection with Dual-Adjacency Network-Informed Ising Priors**
 
-MCMC methods for Bayesian variable selection with Ising/MRF priors informed by graphical model adjacency matrices. `bvs_mh()` uses Metropolis-Hastings (MH) by default and also provides Hamiltonian Monte Carlo (HMC) and the No-U-Turn Sampler (NUTS) for binary outcome and right censored time to event outcome; it supports binary outcomes (default), continuous Gaussian outcomes, right-censored time-to-event outcomes via Cox's model, and count data outcomes via a negative-binomial (Poisson-Gamma) representation. `bvs_pg()` targets binary logistic outcomes. Both samplers support six adjacency-structure types with dense and sparse high-dimensional backends.
+MCMC methods for Bayesian variable selection with Ising/MRF priors informed by graphical model adjacency matrices. `bvs_mh()` uses Metropolis-Hastings (MH) by default and also provides Hamiltonian Monte Carlo (HMC) and the No-U-Turn Sampler (NUTS) for the binary, time-to-event, and imbalanced-binary outcomes; it supports **six** outcome models:
+
+* binary logistic (`outcome_type = "binary"`, default),
+* continuous Gaussian (`outcome_type = "continuous"`),
+* right-censored time-to-event (`outcome_type = "TTE"`) via Cox's partial likelihood,
+* overdispersed count (`outcome_type = "count"`) via a negative-binomial (Poisson-Gamma) representation,
+* **imbalanced binary** (`outcome_type = "imbalanced_binary"`) for rare-event binary outcomes, with two link choices via `imbalanced_link`: `"logit_t"` (Cauchy/Student-t prior on regression coefficients, Gelman et al. 2008) and `"cloglog"` (complementary log-log link with Gaussian prior, King and Zeng 2001),
+* **zero-inflated count** (`outcome_type = "ZIC"`) via a count/point-mass mixture (zero-inflated negative-binomial, Lambert 1992; Ghosh et al. 2006).
+
+`bvs_pg()` targets binary logistic outcomes via Pólya-Gamma augmented conjugate Gibbs. Both samplers support six adjacency-structure types with dense and sparse high-dimensional backends.
 
 ## Features
 
 | Feature | Description |
 |---|---|
 | **Two MCMC samplers** | `bvs_mh` uses Metropolis-Hastings (MH) by default, with optional Hamiltonian Monte Carlo (HMC) and No-U-Turn Sampler (NUTS) updates for binary/TTE models; `bvs_pg` uses Polya-Gamma Gibbs |
-| **Outcome support** | `bvs_mh`: `outcome_type = "binary"`, `"continuous"`, `"TTE"`, or `"count"`; `bvs_pg`: binary logistic |
+| **Outcome support** | `bvs_mh`: `outcome_type = "binary"`, `"continuous"`, `"TTE"`, `"count"`, `"imbalanced_binary"`, or `"ZIC"`; `bvs_pg`: binary logistic |
 | **Six adjacency types** | `"fixed"`, `"dual_fixed"`, `"glasso"`, `"glasso_fixed"`, `"ggm"`, `"ggm_fixed"` |
 | **Dense & sparse backends** | 12 optimised C++ backends for moderate and high-dimensional settings |
 | **Robust MH acceptance** | `safe_mh_accept()` guards against `log(0)`, NaN, and ±Inf in all MH steps |
@@ -106,6 +115,55 @@ fit_count <- bvs_mh(
 fit_count$outcome_type  # "count"
 ```
 
+### Example 1e — MH sampler with imbalanced binary outcome (rare events)
+
+```r
+# Simulate an imbalanced binary outcome (~5% positives)
+prob_imb <- plogis(-3 + as.numeric(X %*% beta_true) / 4)
+y_imb    <- rbinom(n, size = 1, prob = prob_imb)
+
+# logit-t link: Cauchy/Student-t prior on beta (Gelman et al. 2008)
+fit_imb_logit_t <- bvs_mh(
+  X, y_imb,
+  outcome_type   = "imbalanced_binary",
+  imbalanced_link = "logit_t",
+  t_df = 1, t_scale = 2.5,
+  adj_type = "fixed", adj_fixed = R,
+  niter = 10000, burnin = 2000
+)
+
+# cloglog link: complementary log-log link with Gaussian prior (King and Zeng 2001)
+fit_imb_cloglog <- bvs_mh(
+  X, y_imb,
+  outcome_type   = "imbalanced_binary",
+  imbalanced_link = "cloglog",
+  adj_type = "fixed", adj_fixed = R,
+  niter = 10000, burnin = 2000
+)
+fit_imb_logit_t$outcome_type  # "imbalanced_binary"
+```
+
+### Example 1f — MH sampler with zero-inflated count outcome (ZIC)
+
+```r
+# Simulate a zero-inflated negative-binomial outcome
+zero_pi  <- 0.4                                          # zero-inflation probability
+mu_zic   <- exp(0.4 + as.numeric(X %*% beta_true) / 4)   # NB mean for non-structural zeros
+y_zic    <- ifelse(rbinom(n, 1, zero_pi) == 1L,
+                   0L,
+                   rnbinom(n, size = 3, mu = mu_zic))
+
+fit_zic <- bvs_mh(
+  X, y_zic,
+  outcome_type = "ZIC",
+  zinb_a_pi = 1, zinb_b_pi = 1,    # Beta prior on the zero-inflation probability
+  zinb_r    = 1,                    # NB dispersion (or estimate via zinb_estimate_r = TRUE)
+  adj_type  = "fixed", adj_fixed = R,
+  niter = 10000, burnin = 2000
+)
+fit_zic$outcome_type  # "ZIC"
+```
+
 ### Example 2 — PG Gibbs sampler with graphical lasso adjacency (EBIC)
 
 ```r
@@ -176,7 +234,7 @@ ess_tail  <- bvs_ess_tail(fit$eta1)     # tail ESS (min of 5th and 95th pct)
 
 | Parameter | Default | Description |
 |---|---|---|
-| `outcome_type` | `"binary"` | Outcome model for `bvs_mh`: `"binary"` (logistic), `"continuous"` (Gaussian), `"TTE"` (Cox partial likelihood), or `"count"` (negative-binomial via Poisson-Gamma augmentation) |
+| `outcome_type` | `"binary"` | Outcome model for `bvs_mh`: `"binary"` (logistic), `"continuous"` (Gaussian), `"TTE"` (Cox partial likelihood), `"count"` (negative-binomial), `"imbalanced_binary"`, or `"ZIC"` (Zero-Inflated Count) |
 | `event` | `NULL` | Event indicator for `outcome_type = "TTE"` (`1`=event, `0`=censored; `{-1,1}` also accepted); ignored for other outcomes |
 | `alg_type` | `"MH"` | Active-parameter-block update algorithm for `bvs_mh`: `"MH"` = Metropolis-Hastings (default), `"HMC"` = Hamiltonian Monte Carlo, or `"NUTS"` = No-U-Turn Sampler; HMC/NUTS are supported for binary and TTE outcomes |
 | `hmc_step_size` | `0.1` | Initial HMC/NUTS step size; NUTS adapts this during burn-in |
@@ -278,7 +336,7 @@ Both `bvs_mh()` and `bvs_pg()` return an S3 object of class `"bvs"`:
 | `Z_list` | list | GGM adjacency snapshots *(if `store_Z_list = TRUE`)* |
 | `Z_pip` | sparse matrix | GGM edge PIPs *(if `store_Z_pip = TRUE`)* |
 | `call` | call | Matched function call |
-| `outcome_type` | character | Present for `bvs_mh` (`"binary"`, `"continuous"`, `"TTE"`, or `"count"`) |
+| `outcome_type` | character | Present for `bvs_mh` (`"binary"`, `"continuous"`, `"TTE"`, `"count"`, `"imbalanced_binary"`, or `"ZIC"`) |
 | `adj_type`, `sampler` | character | Model identifiers; `sampler` is one of `"mh"`, `"hmc"`, `"nuts"`, or `"pg"` |
 | `niter`, `burnin`, `p`, `n`, `ntau` | integer | Stored run dimensions and counts |
 
@@ -298,11 +356,15 @@ Use `summary()`, `print()`, and `plot()` S3 methods for post-processing.
 - Polson, N. G., Scott, J. G., & Windle, J. (2013). Bayesian inference for logistic models using Pólya–Gamma latent variables. *Journal of the American Statistical Association*, 108(504), 1339–1349.
 - Hoffman, M. D., & Gelman, A. (2014). The No-U-Turn sampler: adaptively setting path lengths in Hamiltonian Monte Carlo. *J. Mach. Learn. Res.*, 15(1), 1593–1623.
 - Betancourt, M. (2017). A conceptual introduction to Hamiltonian Monte Carlo. *arXiv preprint arXiv:1701.02434*.
-- **Zanella, G. (2020).** Informed proposals for local MCMC in discrete spaces. *Journal of the American Statistical Association*, 115(530), 852–865. *(Locally-balanced γ proposals, IMP-6)*
-- **Vihola, M. (2012).** Robust adaptive Metropolis algorithm with coerced acceptance rate. *Statistics and Computing*, 22(5), 997–1008. *(RAM adaptive η proposals, IMP-7)*
+- **Zanella, G. (2020).** Informed proposals for local MCMC in discrete spaces. *Journal of the American Statistical Association*, 115(530), 852–865. *(Locally-balanced γ proposals)*
+- **Vihola, M. (2012).** Robust adaptive Metropolis algorithm with coerced acceptance rate. *Statistics and Computing*, 22(5), 997–1008. *(RAM adaptive η proposals)*
 - Andrieu, C., & Thoms, J. (2008). A tutorial on adaptive MCMC. *Statistics and Computing*, 18(4), 343–373.
-- **Vehtari, A., Gelman, A., Simpson, D., Carpenter, B., & Bürkner, P.-C. (2021).** Rank-normalization, folding, and localization: An improved R̂ for assessing convergence of MCMC. *Bayesian Analysis*, 16(2), 667–718. *(Rank-normalised R̂ and ESS, IMP-8)*
+- **Vehtari, A., Gelman, A., Simpson, D., Carpenter, B., & Bürkner, P.-C. (2021).** Rank-normalization, folding, and localization: An improved R̂ for assessing convergence of MCMC. *Bayesian Analysis*, 16(2), 667–718. *(Rank-normalised R̂ and ESS)*
 - Nishimura, A., & Suchard, M. A. (2022). Prior-preconditioned conjugate gradient method for accelerated Gibbs sampling. *Journal of the American Statistical Association*.
+- **Gelman, A., Jakulin, A., Pittau, M. G., & Su, Y.-S. (2008).** A weakly informative default prior distribution for logistic and other regression models. *The Annals of Applied Statistics*, 2(4), 1360–1383. *(Robust Cauchy/Student-t prior for `logit_t` link in imbalanced binary outcomes)*
+- **King, G., & Zeng, L. (2001).** Logistic regression in rare events data. *Political Analysis*, 9(2), 137–163. *(Complementary log-log link for `cloglog` link in imbalanced binary outcomes)*
+- **Lambert, D. (1992).** Zero-inflated Poisson regression, with an application to defects in manufacturing. *Technometrics*, 34(1), 1–14. *(Zero-inflated count (ZIC) outcome)*
+- **Ghosh, S. K., Mukhopadhyay, P., & Lu, J.-C. (2006).** Bayesian analysis of zero-inflated regression models. *Journal of Statistical Planning and Inference*, 136(4), 1360–1375. *(Bayesian ZINB for ZIC outcomes)*
 
 ## License
 

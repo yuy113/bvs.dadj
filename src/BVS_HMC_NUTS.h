@@ -17,6 +17,7 @@
 #define BVS_HMC_NUTS_H
 
 #include "BayesLogit_Numerics.h"
+#include "BayesLogit_Imbalanced.h"
 #include <RcppArmadillo.h>
 #include <algorithm>
 #include <cmath>
@@ -793,7 +794,10 @@ static inline NUTSNode nuts_build_tree(const arma::vec &theta, const arma::vec &
     double H_new = nlp_new + mass.kinetic_energy(r_new);
     bool valid = std::isfinite(H_new);
     const double energy_error = H_new - H0;
-    const bool divergent = !valid || (energy_error > delta_max);
+    // NUTS-FIX: match hmc_step divergence criterion (two-sided |energy_error|).
+    // A Hamiltonian trajectory should preserve H exactly; any large deviation
+    // (positive or negative) indicates an integrator failure, not a good proposal.
+    const bool divergent = !valid || (std::abs(energy_error) > delta_max);
 
     node.theta_minus = theta_new;
     node.theta_plus = theta_new;
@@ -1539,6 +1543,222 @@ static inline std::pair<double, arma::vec> nlp_grad_binary_joint_sparse(
 
   double grad_q_sig = (nu0 / 2.0) - (nu0 * sigmasq0) / (2.0 * sigmasq);
   grad_q_sig += 0.5 * d - 0.5 * sum_beta_sq / sigmasq;
+  grad_q_sig += 0.5 - 0.5 * a_diff * a_diff / (h * sigmasq);
+  grad_q_sig += 0.5 * ntau - 0.5 * sum_tau_sq / (htau * sigmasq);
+  grad(d + 1 + ntau) = grad_q_sig;
+
+  return {nlp, grad};
+}
+
+// ============================================================================
+// Neg-log-posterior + gradient for imbalanced binary (dense, Joint)
+// Supports both logit_t (Approach A) and cloglog (Approach B)
+// q layout: [beta_active(d), alpha(1), tau(ntau), log_sigmasq(1)]
+// ============================================================================
+static inline std::pair<double, arma::vec> nlp_grad_imbalanced_joint(
+    const arma::mat &X, const arma::vec &y, const arma::mat &Z_dat,
+    const std::vector<arma::uword> &active_idx, const arma::vec &q,
+    double beta0, double alpha0, double tau0, double h, double htau, double nu0,
+    double sigmasq0,
+    bool use_cloglog, bool use_t_prior,
+    double t_scale, const arma::vec &lambda_t) {
+  const arma::uword n = y.n_elem;
+  const int d = (int)active_idx.size();
+  const int ntau = (int)Z_dat.n_cols;
+
+  double alpha = q(d);
+  double log_sigmasq = q(d + 1 + ntau);
+  log_sigmasq = std::max(-23.0, std::min(9.2, log_sigmasq));
+  double sigmasq = std::exp(log_sigmasq);
+
+  static thread_local arma::vec eta;
+  if (eta.n_elem != n) eta.set_size(n);
+  eta.fill(alpha);
+  for (int k = 0; k < d; ++k) {
+    const arma::vec &xk = X.col(active_idx[k]);
+    double b = q(k);
+    for (arma::uword i = 0; i < n; ++i)
+      eta(i) += xk(i) * b;
+  }
+  for (int k = 0; k < ntau; ++k) {
+    const arma::vec &zk = Z_dat.col(k);
+    double t = q(d + 1 + k);
+    for (arma::uword i = 0; i < n; ++i)
+      eta(i) += zk(i) * t;
+  }
+
+  double nlp = 0.0;
+  arma::vec diff_vec(n, arma::fill::zeros);
+  static thread_local arma::vec grad;
+  if (grad.n_elem != q.n_elem) grad.set_size(q.n_elem);
+  grad.zeros();
+
+  if (use_cloglog) {
+    // Complementary log-log likelihood + gradient
+    for (arma::uword i = 0; i < n; ++i) {
+      double ei = std::max(bvs_imbalanced::CLOGLOG_ETA_LO,
+                           std::min(bvs_imbalanced::CLOGLOG_ETA_HI, eta(i)));
+      nlp -= bvs_imbalanced::loglik_cloglog_obs(y(i), ei);
+      // Gradient contribution: -(d logL / d eta)
+      diff_vec(i) = -bvs_imbalanced::cloglog_residual(y(i), ei);
+      grad(d) += diff_vec(i);
+      for (int k = 0; k < ntau; ++k)
+        grad(d + 1 + k) += diff_vec(i) * Z_dat(i, k);
+    }
+  } else {
+    // Standard logistic likelihood (same as nlp_grad_binary_joint)
+    for (arma::uword i = 0; i < n; ++i) {
+      double ei = bvs_dadj::clamp_finite(eta(i), -30.0, 30.0, 0.0);
+      double pi = 1.0 / (1.0 + std::exp(-ei));
+      if (ei > 0.0)
+        nlp += -y(i) * ei + ei + std::log1p(std::exp(-ei));
+      else
+        nlp += -y(i) * ei + std::log1p(std::exp(ei));
+      const double diff = -(y(i) - pi);
+      diff_vec(i) = diff;
+      grad(d) += diff;
+      for (int k = 0; k < ntau; ++k)
+        grad(d + 1 + k) += diff * Z_dat(i, k);
+    }
+  }
+  for (int k = 0; k < d; ++k) {
+    const arma::vec &xk = X.col(active_idx[k]);
+    double acc = 0.0;
+    for (arma::uword i = 0; i < n; ++i)
+      acc += diff_vec(i) * xk(i);
+    grad(k) += acc;
+  }
+
+  // Prior on beta: N(beta0, pvar_j) where pvar_j depends on approach
+  double sum_beta_sq_eff = 0.0;  // sum of beta_k^2 / pvar_k (excluding sigmasq)
+  for (int k = 0; k < d; ++k) {
+    double bk = q(k) - beta0;
+    double pvar_k = use_t_prior ?
+        (t_scale * t_scale * lambda_t(active_idx[k])) : 1.0;
+    sum_beta_sq_eff += bk * bk / pvar_k;
+    grad(k) += bk / (sigmasq * pvar_k);
+  }
+  nlp += 0.5 * d * log_sigmasq + 0.5 * sum_beta_sq_eff / sigmasq;
+
+  double a_diff = q(d) - alpha0;
+  nlp += 0.5 * log_sigmasq + 0.5 * a_diff * a_diff / (h * sigmasq);
+  grad(d) += a_diff / (h * sigmasq);
+
+  double sum_tau_sq = 0.0;
+  for (int k = 0; k < ntau; ++k) {
+    double tk = q(d + 1 + k) - tau0;
+    sum_tau_sq += tk * tk;
+    grad(d + 1 + k) += tk / (htau * sigmasq);
+  }
+  nlp += 0.5 * ntau * log_sigmasq + 0.5 * sum_tau_sq / (htau * sigmasq);
+
+  nlp += (nu0 / 2.0) * log_sigmasq + (nu0 * sigmasq0) / (2.0 * sigmasq);
+
+  double grad_q_sig = (nu0 / 2.0) - (nu0 * sigmasq0) / (2.0 * sigmasq);
+  grad_q_sig += 0.5 * d - 0.5 * sum_beta_sq_eff / sigmasq;
+  grad_q_sig += 0.5 - 0.5 * a_diff * a_diff / (h * sigmasq);
+  grad_q_sig += 0.5 * ntau - 0.5 * sum_tau_sq / (htau * sigmasq);
+  grad(d + 1 + ntau) = grad_q_sig;
+
+  return {nlp, grad};
+}
+
+// ============================================================================
+// Neg-log-posterior + gradient for imbalanced binary (sparse, Joint)
+// ============================================================================
+template <typename IndexVec>
+static inline std::pair<double, arma::vec> nlp_grad_imbalanced_joint_sparse(
+    const arma::uword n, const arma::uword *col_ptr, const arma::uword *row_idx,
+    const double *xvals, const arma::vec &y, const arma::mat &Z_dat,
+    const IndexVec &active_idx, const arma::vec &q, double beta0,
+    double alpha0, double tau0, double h, double htau, double nu0,
+    double sigmasq0,
+    bool use_cloglog, bool use_t_prior,
+    double t_scale, const arma::vec &lambda_t) {
+  const int d = static_cast<int>(active_idx.size());
+  const int ntau = static_cast<int>(Z_dat.n_cols);
+
+  const double alpha = q(d);
+  const double log_sigmasq = std::max(-23.0, std::min(9.2, q(d + 1 + ntau)));
+  const double sigmasq = std::exp(log_sigmasq);
+
+  static thread_local arma::vec eta;
+  if (eta.n_elem != n) eta.set_size(n);
+  eta.fill(alpha);
+  sparse_active_add_to_eta(eta, col_ptr, row_idx, xvals, active_idx, q);
+  for (int k = 0; k < ntau; ++k) {
+    const double tau_k = q(d + 1 + k);
+    if (std::abs(tau_k) < 1e-16) continue;
+    const arma::vec &zk = Z_dat.col(k);
+    for (arma::uword i = 0; i < n; ++i)
+      eta(i) += zk(i) * tau_k;
+  }
+
+  double nlp = 0.0;
+  static thread_local arma::vec diff;
+  if (diff.n_elem != n) diff.set_size(n);
+  diff.zeros();
+  static thread_local arma::vec grad;
+  if (grad.n_elem != q.n_elem) grad.set_size(q.n_elem);
+  grad.zeros();
+
+  if (use_cloglog) {
+    for (arma::uword i = 0; i < n; ++i) {
+      double ei = std::max(bvs_imbalanced::CLOGLOG_ETA_LO,
+                           std::min(bvs_imbalanced::CLOGLOG_ETA_HI, eta(i)));
+      nlp -= bvs_imbalanced::loglik_cloglog_obs(y(i), ei);
+      diff(i) = -bvs_imbalanced::cloglog_residual(y(i), ei);
+      grad(d) += diff(i);
+    }
+  } else {
+    for (arma::uword i = 0; i < n; ++i) {
+      const double ei = bvs_dadj::clamp_finite(eta(i), -30.0, 30.0, 0.0);
+      const double pi = 1.0 / (1.0 + std::exp(-ei));
+      if (ei > 0.0)
+        nlp += -y(i) * ei + ei + std::log1p(std::exp(-ei));
+      else
+        nlp += -y(i) * ei + std::log1p(std::exp(ei));
+      diff(i) = -(y(i) - pi);
+      grad(d) += diff(i);
+    }
+  }
+
+  static thread_local arma::vec grad_beta;
+  sparse_active_xt_weighted(grad_beta, col_ptr, row_idx, xvals, active_idx, diff);
+  for (int k = 0; k < d; ++k)
+    grad(k) = grad_beta(k);
+  for (int k = 0; k < ntau; ++k) {
+    const arma::vec &zk = Z_dat.col(k);
+    for (arma::uword i = 0; i < n; ++i)
+      grad(d + 1 + k) += diff(i) * zk(i);
+  }
+
+  double sum_beta_sq_eff = 0.0;
+  for (int k = 0; k < d; ++k) {
+    const double bk = q(k) - beta0;
+    double pvar_k = use_t_prior ?
+        (t_scale * t_scale * lambda_t(static_cast<arma::uword>(active_idx[k]))) : 1.0;
+    sum_beta_sq_eff += bk * bk / pvar_k;
+    grad(k) += bk / (sigmasq * pvar_k);
+  }
+  nlp += 0.5 * d * log_sigmasq + 0.5 * sum_beta_sq_eff / sigmasq;
+
+  const double a_diff = q(d) - alpha0;
+  nlp += 0.5 * log_sigmasq + 0.5 * a_diff * a_diff / (h * sigmasq);
+  grad(d) += a_diff / (h * sigmasq);
+
+  double sum_tau_sq = 0.0;
+  for (int k = 0; k < ntau; ++k) {
+    const double tk = q(d + 1 + k) - tau0;
+    sum_tau_sq += tk * tk;
+    grad(d + 1 + k) += tk / (htau * sigmasq);
+  }
+  nlp += 0.5 * ntau * log_sigmasq + 0.5 * sum_tau_sq / (htau * sigmasq);
+
+  nlp += (nu0 / 2.0) * log_sigmasq + (nu0 * sigmasq0) / (2.0 * sigmasq);
+
+  double grad_q_sig = (nu0 / 2.0) - (nu0 * sigmasq0) / (2.0 * sigmasq);
+  grad_q_sig += 0.5 * d - 0.5 * sum_beta_sq_eff / sigmasq;
   grad_q_sig += 0.5 - 0.5 * a_diff * a_diff / (h * sigmasq);
   grad_q_sig += 0.5 * ntau - 0.5 * sum_tau_sq / (htau * sigmasq);
   grad(d + 1 + ntau) = grad_q_sig;
